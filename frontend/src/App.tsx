@@ -1,4 +1,4 @@
-import { useState, ChangeEvent, useRef } from 'react';
+import { useState, ChangeEvent, useRef, useEffect } from 'react';
 import axios from 'axios';
 import { 
   Upload, 
@@ -14,7 +14,9 @@ import {
   Cpu,
   Fingerprint,
   Zap,
-  Activity
+  Activity,
+  Video,
+  SwitchCamera
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -37,9 +39,65 @@ function App() {
   const [result, setResult] = useState<RecognitionResult | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<'upload' | 'camera'>('upload');
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+
+  // Handle mode switching and camera cleanup
+  useEffect(() => {
+    if (mode !== 'camera' && stream) {
+      stream.getTracks().forEach(track => track.stop());
+      setStream(null);
+    }
+  }, [mode]);
+
+  const startCamera = async () => {
+    try {
+      const mediaStream = await navigator.mediaDevices.getUserMedia({ 
+        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } } 
+      });
+      setStream(mediaStream);
+      if (videoRef.current) {
+        videoRef.current.srcObject = mediaStream;
+      }
+    } catch (err) {
+      console.error("Camera error:", err);
+      setError("Unable to access camera. Please check permissions.");
+      setMode('upload');
+    }
+  };
+
+  const capturePhoto = () => {
+    if (videoRef.current && canvasRef.current) {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const context = canvas.getContext('2d');
+      if (context) {
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+          if (blob) {
+            const file = new File([blob], "capture.jpg", { type: "image/jpeg" });
+            setSelectedFile(file);
+            setPreviewUrl(URL.createObjectURL(file));
+            setResult(null);
+            setError(null);
+            // Stop camera after capture
+            if (stream) {
+              stream.getTracks().forEach(track => track.stop());
+              setStream(null);
+            }
+          }
+        }, 'image/jpeg', 0.9);
+      }
+    }
+  };
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -57,6 +115,7 @@ function App() {
     setResult(null);
     setError(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
+    if (mode === 'camera') startCamera();
   };
 
   const handleRecognize = async () => {
@@ -115,16 +174,10 @@ function App() {
             </filter>
           </defs>
           
-          {/* Enhanced Neural Wires */}
           <g filter="url(#glow)">
             {neuralPaths.map((path, i) => (
-              <path 
-                key={i} 
-                d={path} 
-                className="stroke-brand-primary/20 fill-none stroke-[1]" 
-              />
+              <path key={i} d={path} className="stroke-brand-primary/20 fill-none stroke-[1]" />
             ))}
-            {/* Animated Synapse Pulse Wires */}
             <g className="stroke-brand-primary/40 fill-none stroke-[1.5] stroke-dasharray-[10,100] animate-[flow-line_10s_linear_infinite]">
               {neuralPaths.map((path, i) => (
                 <path key={`flow-${i}`} d={path} />
@@ -132,7 +185,6 @@ function App() {
             </g>
           </g>
 
-          {/* Neural Nodes (Neurons) */}
           {[
             {x: 150, y: 100, d: 0}, {x: 500, y: 250, d: 1}, {x: 850, y: 100, d: 0.5},
             {x: 200, y: 400, d: 1.5}, {x: 600, y: 500, d: 2}, {x: 900, y: 400, d: 0.8},
@@ -140,24 +192,12 @@ function App() {
             {x: 250, y: 500, d: 0.4}, {x: 500, y: 600, d: 1.1}, {x: 850, y: 500, d: 1.9}
           ].map((node, i) => (
             <g key={i}>
-              <circle 
-                cx={node.x} 
-                cy={node.y} 
-                r="4" 
-                className="fill-brand-primary/40 animate-pulse-node"
-                style={{ animationDelay: `${node.d}s` }}
-              />
-              <circle 
-                cx={node.x} 
-                cy={node.y} 
-                r="1.5" 
-                className="fill-brand-primary shadow-[0_0_8px_rgba(244,63,94,0.8)]"
-              />
+              <circle cx={node.x} cy={node.y} r="4" className="fill-brand-primary/40 animate-pulse-node" style={{ animationDelay: `${node.d}s` }} />
+              <circle cx={node.x} cy={node.y} r="1.5" className="fill-brand-primary shadow-[0_0_8px_rgba(244,63,94,0.8)]" />
             </g>
           ))}
         </svg>
 
-        {/* Particles */}
         {[...Array(20)].map((_, i) => (
           <div 
             key={i}
@@ -177,42 +217,82 @@ function App() {
       </div>
 
       {/* Header Section */}
-      <div className="text-center mb-12 space-y-4 animate-in fade-in slide-in-from-top duration-1000 relative z-10">
-        <div className="inline-flex items-center space-x-2 px-4 py-1.5 rounded-full bg-brand-primary/10 border border-brand-primary/20 text-brand-primary text-[10px] font-bold uppercase tracking-[0.2em]">
+      <div className="text-center mb-10 space-y-4 animate-in fade-in slide-in-from-top duration-1000 relative z-10">
+        {/* <div className="inline-flex items-center space-x-2 px-4 py-1.5 rounded-full bg-brand-primary/10 border border-brand-primary/20 text-brand-primary text-[10px] font-bold uppercase tracking-[0.2em]">
           <Activity className="w-3.5 h-3.5 animate-pulse" />
           <span>Neural Pulse Synchronized</span>
-        </div>
-        <h1 className="text-6xl md:text-8xl font-black tracking-tighter">
+        </div> */}
+        <h1 className="text-5xl md:text-7xl font-black tracking-tighter">
           <span className="text-white drop-shadow-2xl">Neuro</span>
           <span className="text-gradient drop-shadow-[0_0_20px_rgba(244,63,94,0.4)]">Vision</span>
         </h1>
-        <p className="text-slate-400 max-w-lg mx-auto text-lg leading-relaxed font-light">
-          Deep-layer facial synthesis and recognition powered by 
-          <span className="text-brand-primary/80 font-medium ml-1"> Ember-Core AI</span>.
-        </p>
+        
+        {/* Mode Switcher */}
+        <div className="flex items-center justify-center space-x-2 mt-6">
+          <button 
+            onClick={() => setMode('upload')}
+            className={cn(
+              "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+              mode === 'upload' ? "bg-brand-primary text-white" : "glass text-slate-500 hover:text-slate-300"
+            )}
+          >
+            File Upload
+          </button>
+          <button 
+            onClick={() => { setMode('camera'); startCamera(); }}
+            className={cn(
+              "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+              mode === 'camera' ? "bg-brand-primary text-white" : "glass text-slate-500 hover:text-slate-300"
+            )}
+          >
+            Live Camera
+          </button>
+        </div>
       </div>
 
       {/* Main Container */}
-      <div className="w-full max-w-5xl grid md:grid-cols-2 gap-8 items-start relative z-10">
+      <div className="w-full max-w-5xl grid md:grid-cols-2 gap-8 items-stretch relative z-10">
         
-        {/* Upload Section */}
-        <div className="space-y-6 animate-in fade-in slide-in-from-left duration-700 delay-200">
+        {/* Input Section */}
+        <div className="flex flex-col space-y-6 animate-in fade-in slide-in-from-left duration-700 delay-200">
           <div 
             className={cn(
-              "glass rounded-[2.5rem] p-10 transition-all duration-700",
-              !previewUrl && "py-28 flex flex-col items-center justify-center border-dashed border-2 border-brand-primary/10 hover:border-brand-primary/40 cursor-pointer group hover:bg-brand-primary/[0.03]",
+              "glass rounded-[2.5rem] p-10 transition-all duration-700 relative overflow-hidden flex-1",
+              !previewUrl && mode === 'upload' && "py-28 flex flex-col items-center justify-center border-dashed border-2 border-brand-primary/10 hover:border-brand-primary/40 cursor-pointer group hover:bg-brand-primary/[0.03]",
               previewUrl && "bg-white/[0.02]"
             )}
-            onClick={() => !previewUrl && fileInputRef.current?.click()}
+            onClick={() => !previewUrl && mode === 'upload' && fileInputRef.current?.click()}
           >
-            {!previewUrl ? (
+            {mode === 'camera' && !previewUrl ? (
+              <div className="relative rounded-3xl overflow-hidden aspect-video bg-black/40 border border-white/5 shadow-2xl">
+                <video 
+                  ref={videoRef} 
+                  autoPlay 
+                  playsInline 
+                  className="w-full h-full object-cover grayscale-[0.3] brightness-110"
+                />
+                <div className="absolute inset-0 border-2 border-brand-primary/20 pointer-events-none" />
+                <div className="absolute bottom-6 left-1/2 -translate-x-1/2">
+                  <button 
+                    onClick={capturePhoto}
+                    className="w-16 h-16 rounded-full bg-white/10 backdrop-blur-md border-2 border-white/40 flex items-center justify-center hover:bg-brand-primary/20 hover:border-brand-primary transition-all group"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-white group-hover:bg-brand-primary transition-colors" />
+                  </button>
+                </div>
+                <div className="absolute top-4 left-4 flex items-center space-x-2 text-[10px] font-bold text-brand-primary uppercase tracking-widest">
+                  <div className="w-2 h-2 rounded-full bg-brand-primary animate-pulse" />
+                  <span>Live Feed</span>
+                </div>
+              </div>
+            ) : !previewUrl ? (
               <>
                 <div className="w-24 h-24 rounded-3xl bg-brand-primary/10 flex items-center justify-center mb-8 group-hover:scale-110 group-hover:rotate-3 group-hover:bg-brand-primary/20 transition-all duration-500 shadow-inner">
-                  <Fingerprint className="w-12 h-12 text-brand-primary animate-pulse" />
+                  <Upload className="w-12 h-12 text-brand-primary animate-pulse" />
                 </div>
-                <h3 className="text-2xl font-bold text-white mb-3">Begin Neural Scan</h3>
+                <h3 className="text-2xl font-bold text-white mb-3 text-center">Initialize Identity</h3>
                 <p className="text-slate-500 text-center text-sm max-w-[200px] font-light">
-                  Input biometric frame for deep identity verification
+                  Drop identity frame or tap to scan high-res biometric input
                 </p>
               </>
             ) : (
@@ -223,7 +303,6 @@ function App() {
                   className="w-full h-full object-cover transition-transform duration-1000 group-hover/preview:scale-110"
                 />
                 
-                {/* Scanning Animation */}
                 {loading && (
                   <div className="absolute inset-0 z-10">
                     <div className="absolute top-0 left-0 right-0 h-1.5 bg-brand-primary shadow-[0_0_30px_rgba(244,63,94,1)] animate-scan" />
@@ -231,7 +310,6 @@ function App() {
                   </div>
                 )}
 
-                {/* Overlay Controls */}
                 <div className="absolute top-4 right-4 flex space-x-2">
                   <button 
                     onClick={(e) => { e.stopPropagation(); reset(); }}
@@ -268,7 +346,7 @@ function App() {
               </>
             ) : (
               <>
-                <Zap className="w-6 h-6 group-hover:scale-125 group-hover:rotate-12 transition-transform" />
+                <Scan className="w-6 h-6 group-hover:scale-125 group-hover:rotate-12 transition-transform" />
                 <span>Initialize Identification</span>
               </>
             )}
@@ -276,7 +354,7 @@ function App() {
         </div>
 
         {/* Results Section */}
-        <div className="space-y-6 animate-in fade-in slide-in-from-right duration-700 delay-400">
+        <div className="flex flex-col space-y-6 animate-in fade-in slide-in-from-right duration-700 delay-400">
           {error && (
             <div className="glass bg-red-500/10 border-red-500/20 p-8 rounded-[2.5rem] flex items-start space-x-5 animate-in fade-in zoom-in duration-500">
               <div className="p-4 bg-red-500/20 rounded-2xl shadow-lg">
@@ -290,7 +368,7 @@ function App() {
           )}
 
           {!result && !error && (
-            <div className="glass p-12 rounded-[2.5rem] h-full flex flex-col items-center justify-center text-center space-y-8 border-dashed border-2 border-white/[0.02]">
+            <div className="glass p-12 rounded-[2.5rem] flex-1 flex flex-col items-center justify-center text-center space-y-8 border-dashed border-2 border-white/[0.02]">
               <div className="relative">
                 <div className="w-24 h-24 rounded-full border border-brand-primary/10 flex items-center justify-center animate-pulse-slow">
                   <Camera className="w-10 h-10 text-brand-primary/20" />
@@ -307,7 +385,7 @@ function App() {
           )}
 
           {result && (
-            <div className="glass p-10 rounded-[2.5rem] space-y-10 animate-in fade-in zoom-in duration-700 relative overflow-hidden group">
+            <div className="glass p-10 rounded-[2.5rem] flex-1 space-y-10 animate-in fade-in zoom-in duration-700 relative overflow-hidden group">
               <div className="absolute -top-32 -right-32 w-80 h-80 bg-brand-primary/10 rounded-full blur-[120px] group-hover:bg-brand-primary/20 transition-colors duration-1000" />
               
               <div className="flex items-center justify-between relative z-10">
@@ -393,6 +471,9 @@ function App() {
           )}
         </div>
       </div>
+
+      {/* Hidden Canvas for Capturing Frames */}
+      <canvas ref={canvasRef} className="hidden" />
 
       {/* Footer */}
       <div className="mt-20 flex flex-wrap justify-center gap-10 text-slate-700 relative z-10 opacity-40 hover:opacity-100 transition-opacity duration-700">
