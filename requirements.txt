@@ -1,0 +1,16 @@
+# Core API
+fastapi
+uvicorn
+python-multipart
+
+# Image Processing & ML
+numpy
+scikit-learn
+Pillow
+opencv-python
+joblib
+
+# Face Recognition
+mtcnn
+tensorflow
+keras-facenet

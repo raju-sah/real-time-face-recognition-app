@@ -26,7 +26,7 @@ Create a virtual environment and install dependencies:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install numpy scikit-learn Pillow opencv-python mtcnn tensorflow keras-facenet joblib fastapi uvicorn python-multipart
+pip install -r requirements.txt
 ```
 
 ### 2. Run Data Pipeline
@@ -48,8 +48,7 @@ python scripts/train_model.py
 ### 3. Start Backend (FastAPI)
 ```bash
 # From project root
-export PYTHONPATH=$PYTHONPATH:$(pwd)
-python backend/app/main.py
+uvicorn backend.app.main:app --reload
 ```
 *API will run at http://localhost:8000*
 

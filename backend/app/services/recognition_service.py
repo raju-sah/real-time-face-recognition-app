@@ -6,6 +6,10 @@ import json
 from mtcnn import MTCNN
 from keras_facenet import FaceNet
 import gc
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 class FaceRecognitionService:
     _instance = None
@@ -22,7 +26,10 @@ class FaceRecognitionService:
             
         print("Initializing FaceRecognitionService...")
         self.project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        self.model_dir = os.path.join(self.project_root, 'processed_dataset')
+        
+        # Configuration from environment variables
+        model_dir_relative = os.getenv("MODEL_DIR", "processed_dataset")
+        self.model_dir = os.path.join(self.project_root, model_dir_relative)
         
         # Load Model
         model_path = os.path.join(self.model_dir, 'model.pkl')

@@ -3,6 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 import uuid
 import shutil
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 from backend.app.services.recognition_service import recognition_service
 
 app = FastAPI(title="Face Recognition API")
@@ -16,7 +21,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads")
+# Configuration from environment variables
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+UPLOAD_DIR_RELATIVE = os.getenv("UPLOAD_DIR", "backend/uploads")
+UPLOAD_DIR = os.path.join(ROOT_DIR, UPLOAD_DIR_RELATIVE)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 @app.get("/")
@@ -60,4 +68,6 @@ async def recognize_image(file: UploadFile = File(...)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    host = os.getenv("BACKEND_HOST", "0.0.0.0")
+    port = int(os.getenv("BACKEND_PORT", 8000))
+    uvicorn.run(app, host=host, port=port)
