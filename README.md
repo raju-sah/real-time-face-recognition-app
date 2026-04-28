@@ -1,95 +1,86 @@
-# 🚀 NeuroVision: Advanced AI Face Recognition
+# 🚀 NeuroVision: AI-Powered Face Recognition
 
-**NeuroVision** is a state-of-the-art, production-ready facial recognition ecosystem. It combines high-performance neural networks with a premium, immersive user interface to provide real-time biometric identification.
+**NeuroVision** is a robust facial recognition system leveraging deep neural networks to identify individuals with high precision. This project focuses on a complete data engineering pipeline—from raw social media data collection to real-time inference.
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![React](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-rose)
-![FastAPI](https://img.shields.io/badge/Backend-FastAPI-emerald)
 ![AI](https://img.shields.io/badge/AI-MTCNN%20%2B%20FaceNet-orange)
+![FastAPI](https://img.shields.io/badge/Backend-FastAPI-emerald)
+![Dataset](https://img.shields.io/badge/Data-Facebook%20Sourced-blue)
 
-## ✨ Features
+## 🧠 AI & Data Engineering Pipeline
 
-### 🖥️ Premium Frontend (NeuroVision UI)
-- **Ember Theme:** A modern Rose & Orange aesthetic with deep-layer dark modes.
-- **Glassmorphism:** High-end translucent containers with backdrop blur effects.
-- **Animated Backgrounds:** Immersive mesh gradients, floating data particles, and dynamic neural network SVG animations.
-- **Real-Time Camera:** Support for direct webcam capture and biometric snapshots within the browser.
-- **Responsive Design:** Optimized for both desktop and high-resolution displays with balanced card layouts.
+The core of NeuroVision is its multi-stage neural pipeline, designed to handle real-world variations in lighting, pose, and image quality.
 
-### 🧠 Advanced AI Pipeline
-- **Neural Processing:** Automated face detection using **MTCNN** and high-precision embedding generation via **FaceNet**.
-- **Accuracy:** SVM-based classification for lighting-fast and highly accurate identity matching.
-- **Live Scanning:** Visual "neural scan" animations during inference to represent active computation.
+### 1. Data Collection & Preprocessing
+- **Source:** Raw image datasets collected from Facebook profiles of friends and colleagues.
+- **Cleaning:** Automated script to remove low-quality frames and non-face images.
+- **Face Detection (MTCNN):** Uses **Multi-task Cascaded Convolutional Networks** to detect faces and align them by identifying 5 key facial landmarks (eyes, nose, mouth corners).
+- **Cropping:** Faces are extracted and resized to a standard 160x160 pixels for the embedding engine.
 
----
+### 2. Feature Extraction (FaceNet)
+- **Deep Learning:** Utilizes the **FaceNet** model (Inception ResNet v1) to map face images to a 128-dimensional Euclidean space.
+- **Embeddings:** These "face signatures" ensure that images of the same person have small distances between them, while different people are far apart.
 
-## 📂 Project Structure
-- `datasets/`: Raw source images grouped by subject.
-- `scripts/`: Full data lifecycle scripts (Clean → Crop → Embed → Train).
-- `processed_dataset/`: Binary artifacts, neural embeddings, and the trained model.
-- `backend/`: Scalable FastAPI application with modular service architecture.
-- `frontend/`: Premium React + TypeScript + Tailwind v4 application.
+### 3. Classification & Training
+- **Machine Learning:** A **Support Vector Machine (SVM)** classifier is trained on the generated 128D embeddings.
+- **Optimization:** Probability calibration is enabled to provide accurate confidence scores for each prediction.
 
 ---
 
-## 🛠️ Setup Instructions
+## 🏗️ Technical Architecture
+
+### 🛡️ Backend Engine
+- **Framework:** FastAPI for high-concurrency request handling.
+- **Service Layer:** Modular recognition service that initializes the neural models once and reuses them for inference.
+- **Inference Latency:** Optimized for sub-100ms response times on standard CPU hardware.
+
+### 🎨 Frontend Interface
+- **Modern UI:** A sleek "Ember" themed React interface for interacting with the AI.
+- **Features:** Supports both local file uploads and **Real-Time Camera** snapshots.
+- **Visuals:** Features neural-themed background animations and real-time scanning feedback.
+
+---
+
+## 🛠️ Setup & Execution
 
 ### 1. Environment Setup
-Create a virtual environment and install dependencies:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Neural Pipeline Execution
-Initialize the system by processing your dataset:
+### 2. Execute Neural Pipeline
+Initialize the system by processing the Facebook-sourced dataset:
 ```bash
 # 1. Clean raw data
 python scripts/clean_dataset.py
 
-# 2. Detect and crop faces
+# 2. Detect, align, and crop faces (MTCNN)
 python scripts/detect_and_crop.py
 
-# 3. Generate embeddings
+# 3. Generate 128D embeddings (FaceNet)
 python scripts/generate_embeddings.py
 
-# 4. Train the classifier
+# 4. Train the SVM classifier
 python scripts/train_model.py
 ```
 
-### 3. Deploy Backend (FastAPI)
-The backend service handles the heavy lifting of neural inference.
+### 3. Deployment
 ```bash
-# From project root
+# Start Backend (Port 8001)
 uvicorn backend.app.main:app --host 0.0.0.0 --port 8001
+
+# Start Frontend
+cd frontend && pnpm run dev
 ```
-*API will run at http://localhost:8001*
-
-### 4. Deploy Frontend (NeuroVision)
-The immersive UI provides the portal for biometric interaction.
-```bash
-cd frontend
-pnpm install
-pnpm run dev
-```
-*Frontend will run at http://localhost:5173 (or 5174)*
 
 ---
 
-## 📖 Usage Guide
-1. **Initialize Identity:** Choose between **File Upload** or **Live Camera** mode.
-2. **Neural Capture:** Select an image or capture a live biometric snapshot.
-3. **Execute Recognition:** Click the "Initialize Identification" button to begin neural analysis.
-4. **Analysis Snapshot:** View the identified subject, confidence scores, and processing latency in the result panel.
+## ⚡ Stack
+- **AI/ML:** TensorFlow, MTCNN, FaceNet, Scikit-Learn.
+- **API:** FastAPI, Uvicorn.
+- **UI:** React, Tailwind v4, Lucide Icons.
 
 ---
 
-## ⚡ Tech Stack
-- **Frontend:** React 18, Vite, Tailwind CSS v4, Lucide Icons, Framer-style CSS Animations.
-- **Backend:** FastAPI, Python 3.10+, TensorFlow, Keras-FaceNet.
-- **Inference:** MTCNN (Face Detection), FaceNet (Embeddings), Scikit-Learn (Classification).
-
----
-
-Powered by **FastAPI + React + MTCNN + FaceNet**
+Powered by **MTCNN + FaceNet + SVM**
