@@ -217,12 +217,12 @@ function App() {
       </div>
 
       {/* Header Section */}
-      <div className="text-center mb-10 space-y-4 animate-in fade-in slide-in-from-top duration-1000 relative z-10">
+      <div className="text-center mb-5 animate-in fade-in slide-in-from-top duration-1000 relative z-10">
         {/* <div className="inline-flex items-center space-x-2 px-4 py-1.5 rounded-full bg-brand-primary/10 border border-brand-primary/20 text-brand-primary text-[10px] font-bold uppercase tracking-[0.2em]">
           <Activity className="w-3.5 h-3.5 animate-pulse" />
           <span>Neural Pulse Synchronized</span>
         </div> */}
-        <h1 className="text-5xl md:text-7xl font-black tracking-tighter">
+        <h1 className="text-4xl md:text-6xl font-black tracking-tighter">
           <span className="text-white drop-shadow-2xl">Neuro</span>
           <span className="text-gradient drop-shadow-[0_0_20px_rgba(244,63,94,0.4)]">Vision</span>
         </h1>
@@ -251,14 +251,14 @@ function App() {
       </div>
 
       {/* Main Container */}
-      <div className="w-full max-w-5xl grid md:grid-cols-2 gap-8 items-stretch relative z-10">
+      <div className="w-full max-w-4xl grid md:grid-cols-2 gap-6 items-stretch relative z-10">
         
         {/* Input Section */}
         <div className="flex flex-col space-y-6 animate-in fade-in slide-in-from-left duration-700 delay-200">
           <div 
             className={cn(
-              "glass rounded-[2.5rem] p-10 transition-all duration-700 relative overflow-hidden flex-1",
-              !previewUrl && mode === 'upload' && "py-28 flex flex-col items-center justify-center border-dashed border-2 border-brand-primary/10 hover:border-brand-primary/40 cursor-pointer group hover:bg-brand-primary/[0.03]",
+              "glass rounded-[2rem] p-8 transition-all duration-700 relative overflow-hidden flex-1",
+              !previewUrl && mode === 'upload' && "py-20 flex flex-col items-center justify-center border-dashed border-2 border-brand-primary/10 hover:border-brand-primary/40 cursor-pointer group hover:bg-brand-primary/[0.03]",
               previewUrl && "bg-white/[0.02]"
             )}
             onClick={() => !previewUrl && mode === 'upload' && fileInputRef.current?.click()}
@@ -287,10 +287,10 @@ function App() {
               </div>
             ) : !previewUrl ? (
               <>
-                <div className="w-24 h-24 rounded-3xl bg-brand-primary/10 flex items-center justify-center mb-8 group-hover:scale-110 group-hover:rotate-3 group-hover:bg-brand-primary/20 transition-all duration-500 shadow-inner">
-                  <Upload className="w-12 h-12 text-brand-primary animate-pulse" />
+                <div className="w-20 h-20 rounded-2xl bg-brand-primary/10 flex items-center justify-center mb-6 group-hover:scale-110 group-hover:rotate-3 group-hover:bg-brand-primary/20 transition-all duration-500 shadow-inner">
+                  <Upload className="w-10 h-10 text-brand-primary animate-pulse" />
                 </div>
-                <h3 className="text-2xl font-bold text-white mb-3 text-center">Initialize Identity</h3>
+                <h3 className="text-xl font-bold text-white mb-2 text-center">Initialize Identity</h3>
                 <p className="text-slate-500 text-center text-sm max-w-[200px] font-light">
                   Drop identity frame or tap to scan high-res biometric input
                 </p>
@@ -333,7 +333,7 @@ function App() {
             onClick={handleRecognize}
             disabled={!selectedFile || loading}
             className={cn(
-              "w-full py-6 rounded-2xl font-bold text-lg flex items-center justify-center space-x-4 transition-all duration-500 overflow-hidden relative group",
+              "w-full py-4 rounded-xl font-bold text-base flex items-center justify-center space-x-3 transition-all duration-500 overflow-hidden relative group",
               !selectedFile || loading 
               ? 'bg-slate-900/50 text-slate-700 cursor-not-allowed border border-white/5' 
               : 'bg-gradient-to-r from-brand-primary to-brand-secondary text-white shadow-[0_0_40px_rgba(244,63,94,0.25)] hover:shadow-[0_0_60px_rgba(244,63,94,0.4)] hover:-translate-y-1 active:scale-[0.98]'
@@ -341,12 +341,12 @@ function App() {
           >
             {loading ? (
               <>
-                <Loader2 className="w-6 h-6 animate-spin" />
+                <Loader2 className="w-5 h-5 animate-spin" />
                 <span className="tracking-widest uppercase text-xs font-black">Synthesizing Layers...</span>
               </>
             ) : (
               <>
-                <Scan className="w-6 h-6 group-hover:scale-125 group-hover:rotate-12 transition-transform" />
+                <Scan className="w-5 h-5 group-hover:scale-125 group-hover:rotate-12 transition-transform" />
                 <span>Initialize Identification</span>
               </>
             )}
@@ -368,10 +368,10 @@ function App() {
           )}
 
           {!result && !error && (
-            <div className="glass p-12 rounded-[2.5rem] flex-1 flex flex-col items-center justify-center text-center space-y-8 border-dashed border-2 border-white/[0.02]">
+            <div className="glass p-8 rounded-[2rem] flex-1 flex flex-col items-center justify-center text-center space-y-6 border-dashed border-2 border-white/[0.02]">
               <div className="relative">
-                <div className="w-24 h-24 rounded-full border border-brand-primary/10 flex items-center justify-center animate-pulse-slow">
-                  <Camera className="w-10 h-10 text-brand-primary/20" />
+                <div className="w-20 h-20 rounded-full border border-brand-primary/10 flex items-center justify-center animate-pulse-slow">
+                  <Camera className="w-8 h-8 text-brand-primary/20" />
                 </div>
                 <div className="absolute inset-0 border-2 border-brand-primary/20 rounded-full animate-ping opacity-10" />
               </div>
@@ -385,7 +385,7 @@ function App() {
           )}
 
           {result && (
-            <div className="glass p-10 rounded-[2.5rem] flex-1 space-y-10 animate-in fade-in zoom-in duration-700 relative overflow-hidden group">
+            <div className="glass p-8 rounded-[2rem] flex-1 space-y-8 animate-in fade-in zoom-in duration-700 relative overflow-hidden group">
               <div className="absolute -top-32 -right-32 w-80 h-80 bg-brand-primary/10 rounded-full blur-[120px] group-hover:bg-brand-primary/20 transition-colors duration-1000" />
               
               <div className="flex items-center justify-between relative z-10">
@@ -409,15 +409,15 @@ function App() {
               {result.success ? (
                 <div className="space-y-8 relative z-10">
                   <div className="flex items-center space-x-8">
-                    <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-brand-primary to-brand-secondary flex items-center justify-center shadow-[0_25px_60px_rgba(244,63,94,0.35)] relative group/avatar">
-                      <User className="w-12 h-12 text-white group-hover/avatar:scale-110 transition-transform" />
+                    <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-brand-primary to-brand-secondary flex items-center justify-center shadow-[0_25px_60px_rgba(244,63,94,0.35)] relative group/avatar">
+                      <User className="w-10 h-10 text-white group-hover/avatar:scale-110 transition-transform" />
                       <div className="absolute -bottom-3 -right-3 w-10 h-10 bg-slate-950 rounded-2xl border border-white/10 flex items-center justify-center shadow-2xl">
                         <ShieldCheck className="w-5 h-5 text-brand-primary" />
                       </div>
                     </div>
                     <div>
                       <p className="text-slate-500 text-[10px] uppercase tracking-[0.4em] font-black">Target Profile</p>
-                      <h2 className="text-4xl font-black text-white mt-2 tracking-tight">{result.prediction}</h2>
+                      <h2 className="text-3xl font-black text-white mt-1 tracking-tight">{result.prediction}</h2>
                     </div>
                   </div>
 
@@ -425,7 +425,7 @@ function App() {
                     <div className="flex justify-between items-end">
                       <div>
                         <p className="text-slate-500 text-[10px] uppercase tracking-widest font-black">Recognition Match</p>
-                        <p className="text-4xl font-black text-white mt-1">{(result.confidence! * 100).toFixed(1)}<span className="text-brand-primary text-2xl">%</span></p>
+                        <p className="text-3xl font-black text-white mt-1">{(result.confidence! * 100).toFixed(1)}<span className="text-brand-primary text-xl">%</span></p>
                       </div>
                       <div className="text-right">
                         <Cpu className="w-5 h-5 text-brand-primary/40 ml-auto mb-1" />
@@ -453,14 +453,14 @@ function App() {
                 </div>
               ) : (
                 <div className="text-center py-14 space-y-8 relative z-10">
-                  <div className="relative mx-auto w-24 h-24">
+                  <div className="relative mx-auto w-20 h-20">
                     <div className="absolute inset-0 bg-brand-primary/20 rounded-full blur-2xl animate-pulse" />
-                    <div className="relative w-24 h-24 bg-brand-primary/5 rounded-[2rem] border border-brand-primary/10 flex items-center justify-center shadow-inner">
-                      <AlertCircle className="w-10 h-10 text-brand-primary/50" />
+                    <div className="relative w-20 h-20 bg-brand-primary/5 rounded-3xl border border-brand-primary/10 flex items-center justify-center shadow-inner">
+                      <AlertCircle className="w-8 h-8 text-brand-primary/50" />
                     </div>
                   </div>
                   <div className="space-y-3">
-                    <p className="text-white font-black text-2xl tracking-tight font-display">Identity Mismatch</p>
+                    <p className="text-white font-black text-xl tracking-tight font-display">Identity Mismatch</p>
                     <p className="text-slate-500 text-sm px-12 leading-relaxed font-light">
                       The neural signature extracted from this frame does not correlate with any verified biometric profiles in our dataset.
                     </p>
@@ -476,7 +476,7 @@ function App() {
       <canvas ref={canvasRef} className="hidden" />
 
       {/* Footer */}
-      <div className="mt-20 flex flex-wrap justify-center gap-10 text-slate-700 relative z-10 opacity-40 hover:opacity-100 transition-opacity duration-700">
+      <div className="mt-12 flex flex-wrap justify-center gap-8 text-slate-700 relative z-10 opacity-40 hover:opacity-100 transition-opacity duration-700">
         {[
           { label: 'Layer: FastAPI', icon: Activity },
           { label: 'Net: FaceNet-3D', icon: Cpu },
