@@ -1,7 +1,6 @@
 import os
 import cv2
 import numpy as np
-import joblib
 import json
 from mtcnn import MTCNN
 from keras_facenet import FaceNet
@@ -10,6 +9,12 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+def cosine_similarity(a, b):
+    dot_product = np.dot(a, b)
+    norm_a = np.linalg.norm(a, axis=1)
+    norm_b = np.linalg.norm(b)
+    return dot_product / (norm_a * norm_b)
 
 class FaceRecognitionService:
     _instance = None
@@ -31,11 +36,15 @@ class FaceRecognitionService:
         model_dir_relative = os.getenv("MODEL_DIR", "processed_dataset")
         self.model_dir = os.path.join(self.project_root, model_dir_relative)
         
-        # Load Model
-        model_path = os.path.join(self.model_dir, 'model.pkl')
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model file not found at {model_path}. Please train the model first.")
-        self.model = joblib.load(model_path)
+        # Load Embeddings and Labels
+        embeddings_path = os.path.join(self.model_dir, 'embeddings.npy')
+        labels_path = os.path.join(self.model_dir, 'labels.npy')
+        
+        if not os.path.exists(embeddings_path) or not os.path.exists(labels_path):
+            raise FileNotFoundError("Embeddings or labels not found. Please train/generate embeddings first.")
+            
+        self.known_embeddings = np.load(embeddings_path)
+        self.known_labels = np.load(labels_path)
         
         # Load Label Mapping
         mapping_path = os.path.join(self.model_dir, 'label_mapping.json')
@@ -46,8 +55,10 @@ class FaceRecognitionService:
         self.detector = MTCNN()
         self.embedder = FaceNet()
         
+        self.SIMILARITY_THRESHOLD = 0.40  # Standard threshold for FaceNet
+        
         self._initialized = True
-        print("FaceRecognitionService initialized successfully.")
+        print("FaceRecognitionService initialized successfully with Cosine Similarity.")
 
     def recognize(self, image_path):
         """
@@ -87,14 +98,17 @@ class FaceRecognitionService:
             face_batch = np.expand_dims(face_rgb, axis=0)
             embedding = self.embedder.embeddings(face_batch)[0]
             
-            # 4. Predict
-            # model.predict_proba returns probabilities for each class
-            embedding = embedding.reshape(1, -1)
-            probabilities = self.model.predict_proba(embedding)[0]
-            prediction_idx = np.argmax(probabilities)
-            confidence = probabilities[prediction_idx]
+            # 4. Predict using Cosine Similarity
+            similarities = cosine_similarity(self.known_embeddings, embedding)
             
-            person_name = self.label_mapping[str(prediction_idx)]
+            max_idx = np.argmax(similarities)
+            max_similarity = similarities[max_idx]
+            
+            if max_similarity >= self.SIMILARITY_THRESHOLD:
+                prediction_idx = self.known_labels[max_idx]
+                person_name = self.label_mapping[str(prediction_idx)]
+            else:
+                person_name = "Unknown"
 
             # Cleanup
             del image
@@ -104,7 +118,7 @@ class FaceRecognitionService:
 
             return {
                 "person": person_name,
-                "confidence": float(confidence),
+                "confidence": float(max_similarity),
                 "box": [int(x), int(y), int(width), int(height)]
             }
 

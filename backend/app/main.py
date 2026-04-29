@@ -54,8 +54,10 @@ async def recognize_image(file: UploadFile = File(...)):
         if "error" in result:
             return {"success": False, "error": result["error"]}
         
+        is_success = result["person"] != "Unknown"
+        
         return {
-            "success": True, 
+            "success": is_success, 
             "prediction": result["person"], 
             "confidence": result["confidence"],
             "box": result["box"]
