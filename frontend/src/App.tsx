@@ -108,6 +108,7 @@ function App() {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
+  const captureCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   const setActiveStream = (s: MediaStream | null) => {
@@ -139,6 +140,7 @@ function App() {
     interval: ReturnType<typeof setInterval> | null;
     lastResult: RecognitionResult | null;
   } | null>(null);
+  const rafRef = useRef<number | null>(null);
 
   // Upload state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -197,10 +199,15 @@ function App() {
     video.play().catch(() => {});
   }, [stream]);
 
-  const renderFrame = (result: RecognitionResult | null): string | null => {
-    const canvas = overlayRef.current;
+  // Capture the current video frame as a base64 JPEG for the API using an offscreen canvas
+  const captureFrame = (): string | null => {
     const video = videoRef.current;
-    if (!canvas || !video || !video.videoWidth || video.readyState < 1) return null;
+    if (!video || !video.videoWidth || video.readyState < 1) return null;
+    // Use a separate offscreen canvas so we don't interfere with the display overlay
+    if (!captureCanvasRef.current) {
+      captureCanvasRef.current = document.createElement('canvas');
+    }
+    const canvas = captureCanvasRef.current;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
     canvas.width = video.videoWidth;
@@ -208,26 +215,82 @@ function App() {
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
     if (!dataUrl || dataUrl === 'data:,' || dataUrl === 'data:,') return null;
+    return dataUrl;
+  };
+
+  // Draw the video frame + bounding box overlay continuously at ~60fps
+  const drawOverlay = (result: RecognitionResult | null) => {
+    const canvas = overlayRef.current;
+    const video = videoRef.current;
+    if (!canvas || !video || !video.videoWidth || video.readyState < 1) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     if (result && result.faces) {
       for (const face of result.faces) {
         if (!face.box || !face.prediction) continue;
         const [x, y, w, h] = face.box;
-        const rx = canvas.width - x - w;
-        const color = face.success ? '#22c55e' : '#ef4444';
+        // Draw the box at the raw coordinates — CSS scaleX(-1) mirrors both the
+        // video frame and the box together, so they stay aligned.
+        const color = face.success ? '#10b981' : '#f43f5e'; // Emerald 500 / Rose 500
+
+        // Draw solid thick bounding box
         ctx.strokeStyle = color;
         ctx.lineWidth = 4;
-        ctx.strokeRect(rx, y, w, h);
-        ctx.fillStyle = color;
+        ctx.strokeRect(x, y, w, h);
+
+        // Draw label badge above the box
+        ctx.save();
         const label = `${face.prediction} ${((face.confidence ?? 0) * 100).toFixed(0)}%`;
-        ctx.font = 'bold 16px sans-serif';
+        ctx.font = 'bold 20px sans-serif';
         const tw = ctx.measureText(label).width;
-        const labelY = Math.max(0, y - 28);
-        ctx.fillRect(rx, labelY, tw + 14, 26);
-        ctx.fillStyle = '#fff';
-        ctx.fillText(label, rx + 7, Math.max(18, labelY + 18));
+
+        // Position badge above the bounding box
+        const labelY = Math.max(40, y - 10);
+
+        // Flip text horizontally so it reads correctly after CSS scaleX(-1)
+        ctx.translate(x + w, labelY);
+        ctx.scale(-1, 1);
+
+        const paddingX = 14;
+        const badgeHeight = 34;
+        const badgeWidth = tw + paddingX * 2;
+
+        // Draw rounded badge background
+        ctx.fillStyle = 'rgba(24, 24, 27, 0.9)';
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(0, -badgeHeight, badgeWidth, badgeHeight, 8);
+        } else {
+          ctx.rect(0, -badgeHeight, badgeWidth, badgeHeight);
+        }
+        ctx.fill();
+
+        // Draw solid colored left accent border
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(2, -badgeHeight + 5);
+        ctx.lineTo(2, -5);
+        ctx.stroke();
+
+        // Draw the text
+        ctx.fillStyle = '#ffffff';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, paddingX + 2, -badgeHeight / 2);
+
+        ctx.restore();
       }
     }
+  };
+
+  // Legacy wrapper used by enrollment flow (captures + draws)
+  const renderFrame = (result: RecognitionResult | null): string | null => {
+    const dataUrl = captureFrame();
+    drawOverlay(result);
     return dataUrl;
   };
 
@@ -479,7 +542,16 @@ function App() {
     setRecResult(null);
     recRef.current = { running: true, interval: null, lastResult: null };
     setRecRunning(true);
-    recRef.current.interval = setInterval(runRecFrame, 400);
+    recRef.current.interval = setInterval(runRecFrame, 250);
+
+    // Start continuous 60fps overlay loop so the bounding box tracks the face smoothly
+    const animateOverlay = () => {
+      const r = recRef.current;
+      if (!r || !r.running) return;
+      drawOverlay(r.lastResult);
+      rafRef.current = requestAnimationFrame(animateOverlay);
+    };
+    rafRef.current = requestAnimationFrame(animateOverlay);
   };
 
   const runRecFrame = async () => {
@@ -487,7 +559,7 @@ function App() {
     if (!r || !r.running || busyRef.current) return;
     busyRef.current = true;
     try {
-      const dataUrl = renderFrame(r.lastResult);
+      const dataUrl = captureFrame();
       if (!dataUrl) return;
       const resp = await api.post('/recognize/base64', { image_base64: dataUrl });
       r.lastResult = resp.data;
@@ -507,6 +579,10 @@ function App() {
       if (r.interval) clearInterval(r.interval);
     }
     recRef.current = null;
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
     setRecRunning(false);
     stopCamera();
     setRecResult(null);
