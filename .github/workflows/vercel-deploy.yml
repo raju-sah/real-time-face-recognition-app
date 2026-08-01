@@ -12,6 +12,11 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+      statuses: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
