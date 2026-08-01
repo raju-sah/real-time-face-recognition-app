@@ -7,9 +7,16 @@ python-multipart
 numpy
 scikit-learn
 Pillow
-opencv-python
+opencv-python-headless
 joblib
 
 # Face Recognition (ONNX Runtime — fits Render free tier 512MB)
-insightface
+# NOTE: insightface itself is installed with `--no-deps` in build.sh because
+# its metadata requires `opencv-python` (needs system libGL, unavailable on
+# Render's read-only build image). Its deps are listed here explicitly.
 onnxruntime
+onnx
+requests
+scikit-image
+scipy
+tqdm

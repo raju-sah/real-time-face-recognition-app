@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 set -e
 
-# OpenCV needs system libraries that are not in Render's Python image.
-apt-get update -y
-apt-get install -y --no-install-recommends libgl1 libglib2.0-0
-
 pip install --upgrade pip
+
+# insightface's metadata requires `opencv-python`, which needs system libGL.
+# Render's build environment is read-only (no apt-get), so install insightface
+# without deps and satisfy them via requirements.txt + opencv-python-headless.
+pip install --no-deps insightface
 pip install -r requirements.txt
 
 # Pre-download insightface models so the first request isn't slow.
