@@ -1,6 +1,6 @@
 # 🚀 NeuroVision: Real-Time Face Recognition
 
-**NeuroVision** is a real-time face recognition system with **live enrollment** and **instant multi-face identification**. Users enroll by capturing guided multi-angle samples from their camera — no pre-training on a static dataset required. The system learns new faces on the fly via face embeddings and identifies every person in the live camera feed simultaneously.
+**NeuroVision** is a real-time face recognition system with **live enrollment** and **instant multi-face identification**. Users enroll by capturing guided multi-angle samples from their camera — **no offline training, no static dataset required**. The system learns new faces on the fly via face embeddings and identifies every person in the live camera feed simultaneously.
 
 ![AI](https://img.shields.io/badge/AI-MTCNN%20%2B%20FaceNet-orange)
 ![FastAPI](https://img.shields.io/badge/Backend-FastAPI-emerald)
@@ -81,6 +81,23 @@ cd frontend && pnpm run dev
 ```
 
 > Frontend calls `VITE_API_URL` (default `http://localhost:8000`). Keep it aligned with the backend port in `frontend/.env`.
+
+## 📁 Project Structure
+
+```
+real-time-face-recognition-app/
+├── backend/
+│   ├── app/
+│   │   ├── main.py                    # FastAPI routes (enroll, recognize, users)
+│   │   └── services/
+│   │       └── recognition_service.py # MTCNN + FaceNet, pose/quality checks, gallery
+│   ├── gallery/                       # Persisted enrollment profiles (*.json)
+│   └── uploads/                       # Temp files for uploaded/live frames
+├── frontend/                          # React + Vite + Tailwind SPA
+├── requirements.txt
+├── .env                               # Backend config (ports, dirs)
+└── README.md
+```
 
 ## ⚡ Stack
 - **AI/ML:** TensorFlow, Keras, MTCNN, keras-facenet (FaceNet Inception ResNet v1).
