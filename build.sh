@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -e
 
+# Deploys are triggered by .github/workflows/render-deploy.yml (Render
+# auto-deploy is disabled; this file is in the workflow's paths filter).
 pip install --upgrade pip
 
 # insightface's metadata requires `opencv-python`, which needs system libGL.
