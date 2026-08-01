@@ -28,6 +28,11 @@ import {
   Sparkles,
   X,
   Image as ImageIcon,
+  Mail,
+  Link as LinkIcon,
+  GitBranch,
+  AtSign,
+  Globe,
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -1196,6 +1201,64 @@ function App() {
           </div>
         )}
       </div>
+
+      <footer className="border-t border-zinc-800/60 py-6">
+        <div className="mx-auto flex max-w-4xl flex-col items-center gap-4 px-4">
+          <div className="flex items-center gap-3">
+            <a
+              href="mailto:try.rajusah@gmail.com"
+              aria-label="Email"
+              title="try.rajusah@gmail.com"
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-zinc-800 bg-zinc-900 text-zinc-400 transition-colors hover:border-blue-500 hover:text-blue-400"
+            >
+              <Mail className="h-4 w-4" />
+            </a>
+            <a
+              href="https://linkedin.com/in/rajusah18"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="LinkedIn"
+              title="linkedin.com/in/rajusah18"
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-zinc-800 bg-zinc-900 text-zinc-400 transition-colors hover:border-sky-500 hover:text-sky-400"
+            >
+              <LinkIcon className="h-4 w-4" />
+            </a>
+            <a
+              href="https://github.com/raju-sah"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="GitHub"
+              title="github.com/raju-sah"
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-zinc-800 bg-zinc-900 text-zinc-400 transition-colors hover:border-zinc-500 hover:text-zinc-200"
+            >
+              <GitBranch className="h-4 w-4" />
+            </a>
+            <a
+              href="https://instagram.com/okay.raju"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Instagram"
+              title="instagram.com/okay.raju"
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-zinc-800 bg-zinc-900 text-zinc-400 transition-colors hover:border-pink-500 hover:text-pink-400"
+            >
+              <AtSign className="h-4 w-4" />
+            </a>
+            <a
+              href="https://sahraju.com.np/"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Portfolio"
+              title="sahraju.com.np"
+              className="flex h-10 w-10 items-center justify-center rounded-full border border-zinc-800 bg-zinc-900 text-zinc-400 transition-colors hover:border-violet-500 hover:text-violet-400"
+            >
+              <Globe className="h-4 w-4" />
+            </a>
+          </div>
+          <p className="text-xs text-zinc-600">
+            © {new Date().getFullYear()} NeuroVision · Built by Raju Sah · try.rajusah@gmail.com
+          </p>
+        </div>
+      </footer>
     </div>
   );
 }
