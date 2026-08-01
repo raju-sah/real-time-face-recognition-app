@@ -2,14 +2,21 @@
 
 **NeuroVision** is a real-time face recognition system with **live enrollment** and **instant multi-face identification**. Users enroll by capturing guided multi-angle samples from their camera — **no offline training, no static dataset required**. The system learns new faces on the fly via face embeddings and identifies every person in the live camera feed simultaneously.
 
-![AI](https://img.shields.io/badge/AI-MTCNN%20%2B%20FaceNet-orange)
+![AI](https://img.shields.io/badge/AI-insightface%20(SCRFD%20%2B%20ArcFace)-orange)
 ![FastAPI](https://img.shields.io/badge/Backend-FastAPI-emerald)
 ![React](https://img.shields.io/badge/Frontend-React%20%2B%20Vite-blue)
+
+## 🌐 Live Deployment
+
+| | URL | Host |
+|---|---|---|
+| **Backend (FastAPI API)** | https://neurovision-backend-t6nx.onrender.com | Render (free) |
+| **Frontend (React SPA)** | https://face-recognition-frontend-ebon.vercel.app | Vercel (free) |
 
 ## ✨ Features
 
 - **Live Guided Enrollment** — camera-based capture of 6 head poses (front, left, right, up, down, front). The system automatically captures a sample only when your head is at the correct angle.
-- **Real-Time Training** — no model retraining. New faces are added instantly as 512-D FaceNet embeddings into a persistent gallery.
+- **Real-Time Training** — no model retraining. New faces are added instantly as 512-D ArcFace embeddings into a persistent gallery.
 - **Automatic Naming** — leave the name empty and the backend generates a unique human-friendly label (`TestUser-1`, `TestUser-2`, ...). Counter persists across restarts.
 - **Add Samples to Existing Users** — improve recognition accuracy by appending more angle/lighting samples to an existing profile. Near-identical duplicates are skipped automatically.
 - **Real-Time Multi-Face Recognition** — the live camera identifies **all** faces in the frame at once, drawing a name + confidence label above each bounding box (green = known, red = unknown). No captures needed.
@@ -20,9 +27,9 @@
 
 ## 🧠 How It Works
 
-1. **Face Detection (MTCNN)** — locates faces and extracts 5 facial keypoints.
+1. **Face Detection (SCRFD)** — insightface's SCRFD detector locates faces and extracts 5 facial keypoints.
 2. **Pose Estimation** — head yaw/pitch computed from keypoints to guide enrollment angles and validate sample quality.
-3. **Embedding (FaceNet)** — each face is mapped to a 512-D vector ("face signature").
+3. **Embedding (ArcFace)** — each face is mapped to a 512-D vector ("face signature") via the `buffalo_s` ONNX model pack.
 4. **Similarity Matching** — cosine similarity against the gallery; above a threshold → matched person, otherwise `Unknown`.
 5. **Enrollment** — the guided flow appends embeddings per pose and persists the profile to JSON on completion.
 
@@ -82,6 +89,12 @@ cd frontend && pnpm run dev
 
 > Frontend calls `VITE_API_URL` (default `http://localhost:8000`). Keep it aligned with the backend port in `frontend/.env`.
 
+### 3. Cloud Deployment (Render + Vercel)
+
+- **Backend → Render:** pushes touching `backend/**` (or `build.sh`, `render.yaml`, `requirements.txt`, `.python-version`) trigger `.github/workflows/render-deploy.yml`, which posts to Render's deploy hook (auto-deploy is disabled to skip frontend-only pushes). Render free tier runs Python 3.12 (pinned via `.python-version`) with insightface/ONNX on 512MB RAM.
+- **Frontend → Vercel:** pushes touching `frontend/**` trigger `.github/workflows/vercel-deploy.yml`. `VITE_API_URL` is set as a Vercel production env var.
+- See `.opencode/skills/render-cli-deploy/` and `.opencode/skills/vercel-cli-deploy/` for reusable CLI deploy recipes.
+
 ## 📁 Project Structure
 
 ```
@@ -90,19 +103,26 @@ real-time-face-recognition-app/
 │   ├── app/
 │   │   ├── main.py                    # FastAPI routes (enroll, recognize, users)
 │   │   └── services/
-│   │       └── recognition_service.py # MTCNN + FaceNet, pose/quality checks, gallery
+│   │       └── recognition_service.py # insightface (SCRFD + ArcFace), pose/quality checks, gallery
 │   ├── gallery/                       # Persisted enrollment profiles (*.json)
 │   └── uploads/                       # Temp files for uploaded/live frames
 ├── frontend/                          # React + Vite + Tailwind SPA
+├── .github/workflows/                 # render-deploy.yml + vercel-deploy.yml (CI)
+├── .opencode/skills/                  # Reusable Render/Vercel CLI deploy skills
+├── .insightface/                      # Pre-downloaded ONNX models (build.sh, gitignored)
+├── build.sh                           # Render build: deps + model pre-download
+├── render.yaml                        # Render service blueprint (env, health check)
+├── .python-version                    # Pins Python for Render
 ├── requirements.txt
 ├── .env                               # Backend config (ports, dirs)
 └── README.md
 ```
 
 ## ⚡ Stack
-- **AI/ML:** TensorFlow, Keras, MTCNN, keras-facenet (FaceNet Inception ResNet v1).
-- **API:** FastAPI, Uvicorn, OpenCV, NumPy.
+- **AI/ML:** insightface (`buffalo_s` ONNX pack: SCRFD detection + ArcFace recognition), onnxruntime (CPU), OpenCV.
+- **API:** FastAPI, Uvicorn, NumPy, scikit-image.
 - **UI:** React 18, Vite, Tailwind CSS v4, Lucide Icons, Axios.
+- **Hosting:** Render (backend, free tier), Vercel (frontend, free tier), GitHub Actions (CI deploys).
 
 ---
 
@@ -116,4 +136,4 @@ real-time-face-recognition-app/
 
 ---
 
-Powered by **MTCNN + FaceNet**
+Powered by **insightface (SCRFD + ArcFace)**
