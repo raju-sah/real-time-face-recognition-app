@@ -32,4 +32,4 @@ jobs:
           working-directory: ./frontend
           vercel-args: '--prod'
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          github-comment: true
+          github-comment: false
