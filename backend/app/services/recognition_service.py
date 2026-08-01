@@ -7,9 +7,35 @@ import numpy as np
 import gc
 from datetime import datetime, timezone
 import insightface
+import onnxruntime
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def _patch_onnx_sessions():
+    """Force single-threaded, low-memory ONNX sessions.
+
+    insightface builds sessions with default options, which lets onnxruntime
+    allocate a large memory arena per session and one thread per core. On
+    Render's 512MB free tier that can exceed the memory limit, so override
+    the session constructor before the model loads.
+    """
+    original = onnxruntime.InferenceSession.__init__
+
+    def patched(self, path_or_bytes, sess_options=None, **kwargs):
+        if sess_options is None:
+            opts = onnxruntime.SessionOptions()
+            opts.intra_op_num_threads = 1
+            opts.inter_op_num_threads = 1
+            opts.enable_mem_pattern = False
+            sess_options = opts
+        return original(self, path_or_bytes, sess_options, **kwargs)
+
+    onnxruntime.InferenceSession.__init__ = patched
+
+
+_patch_onnx_sessions()
 
 
 def cosine_similarity(a, b):
@@ -47,8 +73,13 @@ class FaceRecognitionService:
         self.gallery_dir = os.path.join(self.project_root, "backend", "gallery")
         os.makedirs(self.gallery_dir, exist_ok=True)
 
+        # Keep the model pack inside the project dir so build.sh can
+        # pre-download it and it ships with the deployable image.
+        self.model_root = os.path.join(self.project_root, ".insightface")
+
         self.model = insightface.app.FaceAnalysis(
             name="buffalo_s",
+            root=self.model_root,
             providers=["CPUExecutionProvider"],
             allowed_modules=["detection", "recognition"],
         )
