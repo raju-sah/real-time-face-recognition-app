@@ -1,11 +1,12 @@
-import { useState, ChangeEvent, useRef, useEffect } from 'react';
+import { useState, ChangeEvent, useRef, useEffect, useCallback } from 'react';
 import axios from 'axios';
-import { 
-  Upload, 
-  User, 
-  ShieldCheck, 
-  AlertCircle, 
-  Loader2, 
+import {
+  Upload,
+  User,
+  ShieldCheck,
+  AlertCircle,
+  AlertTriangle,
+  Loader2,
   Camera,
   Scan,
   CheckCircle2,
@@ -16,7 +17,17 @@ import {
   Zap,
   Activity,
   Video,
-  SwitchCamera
+  Play,
+  StopCircle,
+  Users,
+  Trash2,
+  ArrowUp,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  Sparkles,
+  X,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
@@ -25,468 +36,1165 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-interface RecognitionResult {
+interface FaceResult {
   success: boolean;
   prediction?: string;
   confidence?: number;
   box?: number[];
+}
+
+interface RecognitionResult {
+  success: boolean;
+  faces: FaceResult[];
   error?: string;
 }
 
+interface EnrolledUser {
+  name: string;
+  user_id: string;
+  created_at: string;
+  embedding_count: number;
+}
+
+const POSE_SEQUENCE = [
+  { key: 'front', label: 'Look straight at the camera' },
+  { key: 'left', label: 'Turn your head to your LEFT' },
+  { key: 'right', label: 'Turn your head to your RIGHT' },
+  { key: 'up', label: 'Tilt your chin UP' },
+  { key: 'down', label: 'Look slightly DOWN' },
+  { key: 'front', label: 'Face straight again' },
+];
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const api = axios.create({ baseURL: API_URL, timeout: 30000 });
+
+type View = 'enroll' | 'recognize';
+type RecSubMode = 'camera' | 'upload';
+
+interface EnrollUiState {
+  seqIdx: number;
+  captured: string[];
+  status: string;
+  pose: { yaw?: number; pitch?: number } | null;
+  guidance: {
+    guidance: string;
+    matched: boolean;
+    directions: { left?: boolean; right?: boolean; up?: boolean; down?: boolean };
+  } | null;
+  done: boolean;
+  finalName: string | null;
+  existing: boolean;
+  manualCapturing: boolean;
+  existingDuplicate?: {
+    name: string;
+    user_id: string;
+    reason: 'name' | 'face';
+    message?: string;
+  } | null;
+}
+
 function App() {
+  const [view, setView] = useState<View>('enroll');
+  const [recSubMode, setRecSubMode] = useState<RecSubMode>('camera');
+  const [showProfilesDrawer, setShowProfilesDrawer] = useState(false);
+
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  const setActiveStream = (s: MediaStream | null) => {
+    streamRef.current = s;
+    setStream(s);
+  };
+
+  const stopCamera = useCallback(() => {
+    const s = streamRef.current;
+    if (s) {
+      s.getTracks().forEach((t) => t.stop());
+    }
+    streamRef.current = null;
+    setStream(null);
+    if (videoRef.current) videoRef.current.srcObject = null;
+  }, []);
+
+  const busyRef = useRef(false);
+  const enrollRef = useRef<{
+    running: boolean;
+    userId: string;
+    seqIdx: number;
+    captured: string[];
+    interval: ReturnType<typeof setInterval> | null;
+  } | null>(null);
+
+  const recRef = useRef<{
+    running: boolean;
+    interval: ReturnType<typeof setInterval> | null;
+    lastResult: RecognitionResult | null;
+  } | null>(null);
+
+  // Upload state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [result, setResult] = useState<RecognitionResult | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<'upload' | 'camera'>('upload');
-  const [stream, setStream] = useState<MediaStream | null>(null);
-  
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [uploadResult, setUploadResult] = useState<RecognitionResult | null>(null);
+  const [uploadLoading, setUploadLoading] = useState(false);
 
-  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+  // Enroll state
+  const [enrollName, setEnrollName] = useState('');
+  const [existingUserId, setExistingUserId] = useState('');
+  const [enrollUi, setEnrollUi] = useState<EnrollUiState>({
+    seqIdx: 0,
+    captured: [],
+    status: '',
+    pose: null,
+    guidance: null,
+    done: false,
+    finalName: null,
+    existing: false,
+    manualCapturing: false,
+  });
 
-  // Handle mode switching and camera cleanup
-  useEffect(() => {
-    if (mode !== 'camera' && stream) {
-      stream.getTracks().forEach(track => track.stop());
-      setStream(null);
-    }
-  }, [mode]);
+  // Live Recognize state
+  const [recResult, setRecResult] = useState<RecognitionResult | null>(null);
+  const [recRunning, setRecRunning] = useState(false);
 
-  const startCamera = async () => {
+  // Enrolled Users
+  const [users, setUsers] = useState<EnrolledUser[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+
+  const startCamera = async (): Promise<boolean> => {
+    stopCamera();
     try {
-      const mediaStream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } } 
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
       });
-      setStream(mediaStream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
+      setActiveStream(mediaStream);
+      const deadline = Date.now() + 4000;
+      while (Date.now() < deadline) {
+        const video = videoRef.current;
+        if (video && video.srcObject && video.videoWidth > 0 && video.readyState >= 1) return true;
+        await new Promise<void>((r) => setTimeout(r, 80));
       }
+      return true;
     } catch (err) {
-      console.error("Camera error:", err);
-      setError("Unable to access camera. Please check permissions.");
-      setMode('upload');
+      console.error('Camera error:', err);
+      setError('Unable to access camera. Please check permissions.');
+      return false;
     }
   };
 
-  const capturePhoto = () => {
-    if (videoRef.current && canvasRef.current) {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const context = canvas.getContext('2d');
-      if (context) {
-        context.drawImage(video, 0, 0, canvas.width, canvas.height);
-        canvas.toBlob((blob) => {
-          if (blob) {
-            const file = new File([blob], "capture.jpg", { type: "image/jpeg" });
-            setSelectedFile(file);
-            setPreviewUrl(URL.createObjectURL(file));
-            setResult(null);
-            setError(null);
-            // Stop camera after capture
-            if (stream) {
-              stream.getTracks().forEach(track => track.stop());
-              setStream(null);
-            }
-          }
-        }, 'image/jpeg', 0.9);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !stream) return;
+    video.srcObject = stream;
+    video.play().catch(() => {});
+  }, [stream]);
+
+  const renderFrame = (result: RecognitionResult | null): string | null => {
+    const canvas = overlayRef.current;
+    const video = videoRef.current;
+    if (!canvas || !video || !video.videoWidth || video.readyState < 1) return null;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+    if (!dataUrl || dataUrl === 'data:,' || dataUrl === 'data:,') return null;
+
+    if (result && result.faces) {
+      for (const face of result.faces) {
+        if (!face.box || !face.prediction) continue;
+        const [x, y, w, h] = face.box;
+        const rx = canvas.width - x - w;
+        const color = face.success ? '#22c55e' : '#ef4444';
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 4;
+        ctx.strokeRect(rx, y, w, h);
+        ctx.fillStyle = color;
+        const label = `${face.prediction} ${((face.confidence ?? 0) * 100).toFixed(0)}%`;
+        ctx.font = 'bold 16px sans-serif';
+        const tw = ctx.measureText(label).width;
+        const labelY = Math.max(0, y - 28);
+        ctx.fillRect(rx, labelY, tw + 14, 26);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(label, rx + 7, Math.max(18, labelY + 18));
       }
     }
+    return dataUrl;
   };
 
+  const fetchUsers = async () => {
+    setUsersLoading(true);
+    try {
+      const resp = await api.get('/users');
+      setUsers(resp.data.users ?? []);
+    } catch {
+      setUsers([]);
+    } finally {
+      setUsersLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchUsers();
+  }, []);
+
+  const handleSwitchView = (newView: View) => {
+    if (view === newView) return;
+    stopCamera();
+    enrollRef.current = null;
+    recRef.current = null;
+    setRecRunning(false);
+    setView(newView);
+  };
+
+  // ------------------------------------------------------------ enrollment
+  const startEnroll = async () => {
+    setError(null);
+
+    try {
+      const form = new URLSearchParams();
+      form.append('name', enrollName);
+      if (existingUserId) form.append('existing_user_id', existingUserId);
+      const resp = await api.post('/enroll/start', form, {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      });
+      const data = resp.data;
+
+      if (data.status === 'already_exists') {
+        setEnrollUi({
+          seqIdx: 0,
+          captured: [],
+          status: data.message || `Profile '${data.existing_name}' already exists.`,
+          pose: null,
+          guidance: null,
+          done: false,
+          finalName: null,
+          existing: false,
+          manualCapturing: false,
+          existingDuplicate: {
+            name: data.existing_name,
+            user_id: data.existing_user_id,
+            reason: data.reason || 'name',
+            message: data.message,
+          },
+        });
+        return;
+      }
+
+      const ok = await startCamera();
+      if (!ok) return;
+
+      enrollRef.current = {
+        running: true,
+        userId: data.user_id,
+        seqIdx: 0,
+        captured: [],
+        interval: null,
+      };
+      setEnrollUi({
+        seqIdx: 0,
+        captured: [],
+        status: POSE_SEQUENCE[0].label,
+        pose: null,
+        guidance: null,
+        done: false,
+        finalName: null,
+        existing: data.existing ?? false,
+        manualCapturing: false,
+        existingDuplicate: null,
+      });
+      enrollRef.current.interval = setInterval(() => runEnrollFrame(false), 550);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to start enrollment';
+      setError(msg);
+      stopCamera();
+    }
+  };
+
+  const runEnrollFrame = async (force = false) => {
+    const e = enrollRef.current;
+    if (!e || !e.running) return;
+    if (busyRef.current && !force) return;
+    busyRef.current = true;
+    if (force) {
+      setEnrollUi((prev) => ({ ...prev, manualCapturing: true }));
+    }
+    try {
+      const dataUrl = renderFrame(null);
+      if (!dataUrl) {
+        setEnrollUi((prev) => ({ ...prev, status: 'Waiting for camera frames...', manualCapturing: false }));
+        return;
+      }
+      const fetched = await fetch(dataUrl);
+      const rawBlob = await fetched.blob();
+      if (rawBlob.size === 0) {
+        setEnrollUi((prev) => ({ ...prev, status: 'Waiting for camera frames...', manualCapturing: false }));
+        return;
+      }
+      const blob = new Blob([rawBlob], { type: 'image/jpeg' });
+      const fd = new FormData();
+      fd.append('file', blob, 'frame.jpg');
+      fd.append('user_id', e.userId);
+      fd.append('target_pose', POSE_SEQUENCE[e.seqIdx].key);
+      if (force) {
+        fd.append('force', 'true');
+      }
+
+      const resp = await api.post('/enroll/sample', fd);
+      const data = resp.data;
+
+      if (data.status === 'already_exists') {
+        if (e) {
+          e.running = false;
+          if (e.interval) clearInterval(e.interval);
+        }
+        stopCamera();
+        setEnrollUi((prev) => ({
+          ...prev,
+          status: data.message || `Profile '${data.existing_name}' already exists.`,
+          manualCapturing: false,
+          existingDuplicate: {
+            name: data.existing_name,
+            user_id: data.existing_user_id,
+            reason: data.reason || 'face',
+            message: data.message,
+          },
+        }));
+        return;
+      }
+
+      if (data.status === 'captured') {
+        e.captured.push(POSE_SEQUENCE[e.seqIdx].key);
+        if (e.seqIdx < POSE_SEQUENCE.length - 1) {
+          e.seqIdx += 1;
+          setEnrollUi((prev) => ({
+            ...prev,
+            seqIdx: e.seqIdx,
+            captured: [...e.captured],
+            status: POSE_SEQUENCE[e.seqIdx].label,
+            pose: data.pose ?? null,
+            guidance: data.guidance ?? null,
+            done: false,
+            finalName: null,
+            manualCapturing: false,
+          }));
+        } else {
+          setEnrollUi((prev) => ({
+            ...prev,
+            captured: [...e.captured],
+            status: 'All samples captured — saving profile...',
+            pose: data.pose ?? null,
+            guidance: data.guidance ?? null,
+            manualCapturing: false,
+          }));
+          await completeEnroll();
+        }
+      } else {
+        setEnrollUi((prev) => ({
+          ...prev,
+          status: data.message || 'Adjust head position',
+          pose: data.pose ?? null,
+          guidance: data.guidance ?? null,
+          manualCapturing: false,
+        }));
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Enroll request failed';
+      setEnrollUi((prev) => ({ ...prev, status: msg, manualCapturing: false }));
+    } finally {
+      busyRef.current = false;
+    }
+  };
+
+  const captureManually = () => {
+    runEnrollFrame(true);
+  };
+
+  const completeEnroll = async () => {
+    const e = enrollRef.current;
+    if (!e) return;
+    e.running = false;
+    if (e.interval) clearInterval(e.interval);
+    try {
+      const resp = await api.post('/enroll/complete', { user_id: e.userId, name: enrollName });
+      const data = resp.data;
+      setEnrollUi((prev) => ({
+        ...prev,
+        done: true,
+        existing: data.existing ?? false,
+        finalName: data.name,
+        status: data.existing
+          ? `Added ${data.added_count} new sample${data.added_count === 1 ? '' : 's'} to ${data.name} — ${data.embedding_count} total`
+          : `Profile saved with ${data.embedding_count} samples`,
+      }));
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to save profile';
+      setEnrollUi((prev) => ({ ...prev, status: msg }));
+    } finally {
+      stopCamera();
+      fetchUsers();
+    }
+  };
+
+  const abortEnroll = async () => {
+    const e = enrollRef.current;
+    if (e) {
+      e.running = false;
+      if (e.interval) clearInterval(e.interval);
+      try {
+        await api.post('/enroll/abort', { user_id: e.userId });
+      } catch {
+        /* ignore */
+      }
+    }
+    stopCamera();
+    setEnrollUi({
+      seqIdx: 0,
+      captured: [],
+      status: '',
+      pose: null,
+      guidance: null,
+      done: false,
+      finalName: null,
+      existing: false,
+      manualCapturing: false,
+      existingDuplicate: null,
+    });
+  };
+
+  // ------------------------------------------------------------ live recognition
+  const startRecognition = async () => {
+    setError(null);
+    const ok = await startCamera();
+    if (!ok) return;
+    setRecResult(null);
+    recRef.current = { running: true, interval: null, lastResult: null };
+    setRecRunning(true);
+    recRef.current.interval = setInterval(runRecFrame, 400);
+  };
+
+  const runRecFrame = async () => {
+    const r = recRef.current;
+    if (!r || !r.running || busyRef.current) return;
+    busyRef.current = true;
+    try {
+      const dataUrl = renderFrame(r.lastResult);
+      if (!dataUrl) return;
+      const resp = await api.post('/recognize/base64', { image_base64: dataUrl });
+      r.lastResult = resp.data;
+      setRecResult(resp.data);
+    } catch {
+      r.lastResult = { success: false, faces: [], error: 'request_failed' };
+      setRecResult(r.lastResult);
+    } finally {
+      busyRef.current = false;
+    }
+  };
+
+  const stopRecognition = () => {
+    const r = recRef.current;
+    if (r) {
+      r.running = false;
+      if (r.interval) clearInterval(r.interval);
+    }
+    recRef.current = null;
+    setRecRunning(false);
+    stopCamera();
+    setRecResult(null);
+  };
+
+  // ------------------------------------------------------------ upload
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      setSelectedFile(file);
-      setPreviewUrl(URL.createObjectURL(file));
-      setResult(null);
-      setError(null);
-    }
-  };
-
-  const reset = () => {
-    setSelectedFile(null);
-    setPreviewUrl(null);
-    setResult(null);
+    if (!file) return;
+    setSelectedFile(file);
+    setPreviewUrl(URL.createObjectURL(file));
+    setUploadResult(null);
     setError(null);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-    if (mode === 'camera') startCamera();
   };
 
-  const handleRecognize = async () => {
+  const uploadAndRecognize = async () => {
     if (!selectedFile) return;
-
-    setLoading(true);
+    setUploadLoading(true);
     setError(null);
-    const formData = new FormData();
-    formData.append('file', selectedFile);
-
     try {
-      const response = await axios.post(`${API_URL}/recognize`, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
-      setResult(response.data);
-    } catch (err: any) {
-      console.error(err);
-      setError(err.response?.data?.detail || 'Failed to connect to the AI engine.');
+      const fd = new FormData();
+      fd.append('file', selectedFile);
+      const resp = await api.post('/recognize', fd);
+      setUploadResult(resp.data);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Upload failed';
+      setError(msg);
     } finally {
-      setLoading(false);
+      setUploadLoading(false);
     }
   };
-
-  const neuralPaths = [
-    "M-100,200 C150,100 350,300 500,250 S850,100 1200,200",
-    "M-100,500 C200,400 400,600 600,500 S900,400 1200,500",
-    "M-100,800 C150,700 350,900 550,850 S850,700 1200,800",
-    "M200,-100 C100,150 300,350 250,500 S100,850 200,1200",
-    "M500,-100 C400,200 600,400 500,600 S400,900 500,1200",
-    "M800,-100 C700,150 900,350 850,500 S700,850 800,1200"
-  ];
 
   return (
-    <div className="min-h-screen bg-gradient-mesh flex flex-col items-center justify-center p-4 md:p-8 relative overflow-hidden">
-      {/* Dynamic Background Elements */}
-      <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
-        <div className="orb w-[600px] h-[600px] bg-brand-primary/10 -top-48 -left-24 animate-float" />
-        <div className="orb w-[500px] h-[500px] bg-brand-secondary/10 top-1/2 -right-24 animate-float-delayed" />
-        <div className="orb w-[400px] h-[400px] bg-brand-primary/5 bottom-0 left-1/4 animate-pulse-slow" />
-        
-        {/* Neural Network SVG Background */}
-        <svg className="absolute inset-0 w-full h-full opacity-30" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <linearGradient id="line-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="var(--color-brand-primary)" stopOpacity="0.1" />
-              <stop offset="100%" stopColor="var(--color-brand-secondary)" stopOpacity="0.1" />
-            </linearGradient>
-            <filter id="glow">
-              <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
-              <feMerge>
-                <feMergeNode in="coloredBlur"/>
-                <feMergeNode in="SourceGraphic"/>
-              </feMerge>
-            </filter>
-          </defs>
-          
-          <g filter="url(#glow)">
-            {neuralPaths.map((path, i) => (
-              <path key={i} d={path} className="stroke-brand-primary/20 fill-none stroke-[1]" />
-            ))}
-            <g className="stroke-brand-primary/40 fill-none stroke-[1.5] stroke-dasharray-[10,100] animate-[flow-line_10s_linear_infinite]">
-              {neuralPaths.map((path, i) => (
-                <path key={`flow-${i}`} d={path} />
-              ))}
-            </g>
-          </g>
-
-          {[
-            {x: 150, y: 100, d: 0}, {x: 500, y: 250, d: 1}, {x: 850, y: 100, d: 0.5},
-            {x: 200, y: 400, d: 1.5}, {x: 600, y: 500, d: 2}, {x: 900, y: 400, d: 0.8},
-            {x: 150, y: 700, d: 1.2}, {x: 550, y: 850, d: 0.3}, {x: 850, y: 700, d: 1.7},
-            {x: 250, y: 500, d: 0.4}, {x: 500, y: 600, d: 1.1}, {x: 850, y: 500, d: 1.9}
-          ].map((node, i) => (
-            <g key={i}>
-              <circle cx={node.x} cy={node.y} r="4" className="fill-brand-primary/40 animate-pulse-node" style={{ animationDelay: `${node.d}s` }} />
-              <circle cx={node.x} cy={node.y} r="1.5" className="fill-brand-primary shadow-[0_0_8px_rgba(244,63,94,0.8)]" />
-            </g>
-          ))}
-        </svg>
-
-        {[...Array(20)].map((_, i) => (
-          <div 
-            key={i}
-            className="particle"
-            style={{
-              width: `${Math.random() * 2 + 1}px`,
-              height: `${Math.random() * 2 + 1}px`,
-              left: `${Math.random() * 100}%`,
-              bottom: `-20px`,
-              animationDuration: `${Math.random() * 15 + 15}s`,
-              animationDelay: `${Math.random() * 30}s`,
-              backgroundColor: i % 2 === 0 ? 'var(--color-brand-primary)' : 'var(--color-brand-secondary)',
-              opacity: 0.2
-            }}
-          />
-        ))}
-      </div>
-
-      {/* Header Section */}
-      <div className="text-center mb-5 animate-in fade-in slide-in-from-top duration-1000 relative z-10">
-        {/* <div className="inline-flex items-center space-x-2 px-4 py-1.5 rounded-full bg-brand-primary/10 border border-brand-primary/20 text-brand-primary text-[10px] font-bold uppercase tracking-[0.2em]">
-          <Activity className="w-3.5 h-3.5 animate-pulse" />
-          <span>Neural Pulse Synchronized</span>
-        </div> */}
-        <h1 className="text-4xl md:text-6xl font-black tracking-tighter">
-          <span className="text-white drop-shadow-2xl">Neuro</span>
-          <span className="text-gradient drop-shadow-[0_0_20px_rgba(244,63,94,0.4)]">Vision</span>
-        </h1>
-        
-        {/* Mode Switcher */}
-        <div className="flex items-center justify-center space-x-2 mt-6">
-          <button 
-            onClick={() => setMode('upload')}
-            className={cn(
-              "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
-              mode === 'upload' ? "bg-brand-primary text-white" : "glass text-slate-500 hover:text-slate-300"
-            )}
-          >
-            File Upload
-          </button>
-          <button 
-            onClick={() => { setMode('camera'); startCamera(); }}
-            className={cn(
-              "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
-              mode === 'camera' ? "bg-brand-primary text-white" : "glass text-slate-500 hover:text-slate-300"
-            )}
-          >
-            Live Camera
-          </button>
-        </div>
-      </div>
-
-      {/* Main Container */}
-      <div className="w-full max-w-4xl grid md:grid-cols-2 gap-6 items-stretch relative z-10">
-        
-        {/* Input Section */}
-        <div className="flex flex-col space-y-6 animate-in fade-in slide-in-from-left duration-700 delay-200">
-          <div 
-            className={cn(
-              "glass rounded-[2rem] p-8 transition-all duration-700 relative overflow-hidden flex-1",
-              !previewUrl && mode === 'upload' && "py-20 flex flex-col items-center justify-center border-dashed border-2 border-brand-primary/10 hover:border-brand-primary/40 cursor-pointer group hover:bg-brand-primary/[0.03]",
-              previewUrl && "bg-white/[0.02]"
-            )}
-            onClick={() => !previewUrl && mode === 'upload' && fileInputRef.current?.click()}
-          >
-            {mode === 'camera' && !previewUrl ? (
-              <div className="relative rounded-3xl overflow-hidden aspect-video bg-black/40 border border-white/5 shadow-2xl">
-                <video 
-                  ref={videoRef} 
-                  autoPlay 
-                  playsInline 
-                  className="w-full h-full object-cover grayscale-[0.3] brightness-110"
-                />
-                <div className="absolute inset-0 border-2 border-brand-primary/20 pointer-events-none" />
-                <div className="absolute bottom-6 left-1/2 -translate-x-1/2">
-                  <button 
-                    onClick={capturePhoto}
-                    className="w-16 h-16 rounded-full bg-white/10 backdrop-blur-md border-2 border-white/40 flex items-center justify-center hover:bg-brand-primary/20 hover:border-brand-primary transition-all group"
-                  >
-                    <div className="w-12 h-12 rounded-full bg-white group-hover:bg-brand-primary transition-colors" />
-                  </button>
-                </div>
-                <div className="absolute top-4 left-4 flex items-center space-x-2 text-[10px] font-bold text-brand-primary uppercase tracking-widest">
-                  <div className="w-2 h-2 rounded-full bg-brand-primary animate-pulse" />
-                  <span>Live Feed</span>
-                </div>
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 font-sans selection:bg-blue-500 selection:text-white">
+      {/* ------------------------------------------------------ SLIDE-OVER PROFILES DRAWER */}
+      {showProfilesDrawer && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/70 backdrop-blur-sm transition-opacity">
+          <div className="w-full max-w-md bg-zinc-900 border-l border-zinc-800 p-6 flex flex-col h-full shadow-2xl">
+            <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
+              <div className="flex items-center gap-2.5">
+                <Users className="h-5 w-5 text-blue-400" />
+                <h2 className="font-semibold text-lg text-white">Enrolled Profiles</h2>
+                <span className="rounded-full bg-blue-500/20 px-2.5 py-0.5 text-xs font-bold text-blue-300">
+                  {users.length}
+                </span>
               </div>
-            ) : !previewUrl ? (
-              <>
-                <div className="w-20 h-20 rounded-2xl bg-brand-primary/10 flex items-center justify-center mb-6 group-hover:scale-110 group-hover:rotate-3 group-hover:bg-brand-primary/20 transition-all duration-500 shadow-inner">
-                  <Upload className="w-10 h-10 text-brand-primary animate-pulse" />
-                </div>
-                <h3 className="text-xl font-bold text-white mb-2 text-center">Initialize Identity</h3>
-                <p className="text-slate-500 text-center text-sm max-w-[200px] font-light">
-                  Drop identity frame or tap to scan high-res biometric input
-                </p>
-              </>
-            ) : (
-              <div className="relative overflow-hidden rounded-3xl border border-white/5 aspect-square md:aspect-auto group/preview shadow-2xl">
-                <img 
-                  src={previewUrl} 
-                  alt="Identity Preview" 
-                  className="w-full h-full object-cover transition-transform duration-1000 group-hover/preview:scale-110"
-                />
-                
-                {loading && (
-                  <div className="absolute inset-0 z-10">
-                    <div className="absolute top-0 left-0 right-0 h-1.5 bg-brand-primary shadow-[0_0_30px_rgba(244,63,94,1)] animate-scan" />
-                    <div className="absolute inset-0 bg-brand-primary/20 backdrop-blur-[1px]" />
-                  </div>
-                )}
-
-                <div className="absolute top-4 right-4 flex space-x-2">
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); reset(); }}
-                    className="p-3 rounded-full glass bg-black/60 text-white/80 hover:text-white hover:scale-110 transition-all"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            )}
-            <input 
-              type='file' 
-              ref={fileInputRef}
-              className="hidden" 
-              onChange={handleFileChange} 
-              accept="image/*" 
-            />
-          </div>
-
-          <button
-            onClick={handleRecognize}
-            disabled={!selectedFile || loading}
-            className={cn(
-              "w-full py-4 rounded-xl font-bold text-base flex items-center justify-center space-x-3 transition-all duration-500 overflow-hidden relative group",
-              !selectedFile || loading 
-              ? 'bg-slate-900/50 text-slate-700 cursor-not-allowed border border-white/5' 
-              : 'bg-gradient-to-r from-brand-primary to-brand-secondary text-white shadow-[0_0_40px_rgba(244,63,94,0.25)] hover:shadow-[0_0_60px_rgba(244,63,94,0.4)] hover:-translate-y-1 active:scale-[0.98]'
-            )}
-          >
-            {loading ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin" />
-                <span className="tracking-widest uppercase text-xs font-black">Synthesizing Layers...</span>
-              </>
-            ) : (
-              <>
-                <Scan className="w-5 h-5 group-hover:scale-125 group-hover:rotate-12 transition-transform" />
-                <span>Initialize Identification</span>
-              </>
-            )}
-          </button>
-        </div>
-
-        {/* Results Section */}
-        <div className="flex flex-col space-y-6 animate-in fade-in slide-in-from-right duration-700 delay-400">
-          {error && (
-            <div className="glass bg-red-500/10 border-red-500/20 p-8 rounded-[2.5rem] flex items-start space-x-5 animate-in fade-in zoom-in duration-500">
-              <div className="p-4 bg-red-500/20 rounded-2xl shadow-lg">
-                <AlertCircle className="w-8 h-8 text-red-500" />
-              </div>
-              <div>
-                <h4 className="font-bold text-red-500 text-xl font-display">System Failure</h4>
-                <p className="text-red-200/60 text-sm mt-2 leading-relaxed font-light">{error}</p>
-              </div>
+              <button
+                onClick={() => setShowProfilesDrawer(false)}
+                className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
             </div>
-          )}
 
-          {!result && !error && (
-            <div className="glass p-8 rounded-[2rem] flex-1 flex flex-col items-center justify-center text-center space-y-6 border-dashed border-2 border-white/[0.02]">
-              <div className="relative">
-                <div className="w-20 h-20 rounded-full border border-brand-primary/10 flex items-center justify-center animate-pulse-slow">
-                  <Camera className="w-8 h-8 text-brand-primary/20" />
+            <div className="flex-1 overflow-y-auto py-4 space-y-2">
+              {usersLoading ? (
+                <div className="flex items-center justify-center py-12 text-sm text-zinc-500 gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin text-blue-400" /> Loading profiles...
                 </div>
-                <div className="absolute inset-0 border-2 border-brand-primary/20 rounded-full animate-ping opacity-10" />
-              </div>
-              <div className="space-y-2">
-                <p className="text-slate-400 text-sm font-medium tracking-wide">Awaiting Signal</p>
-                <p className="text-slate-600 text-xs font-light max-w-[200px]">
-                  Provide biometric visual data to activate neural mapping sequences.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {result && (
-            <div className="glass p-8 rounded-[2rem] flex-1 space-y-8 animate-in fade-in zoom-in duration-700 relative overflow-hidden group">
-              <div className="absolute -top-32 -right-32 w-80 h-80 bg-brand-primary/10 rounded-full blur-[120px] group-hover:bg-brand-primary/20 transition-colors duration-1000" />
-              
-              <div className="flex items-center justify-between relative z-10">
-                <div className="flex items-center space-x-3">
-                  <div className="w-2 h-2 rounded-full bg-brand-primary animate-pulse" />
-                  <h3 className="text-lg font-bold text-white/90 font-display">Neural Inference</h3>
-                </div>
-                {result.success ? (
-                  <span className="px-4 py-1.5 rounded-full bg-brand-primary/10 text-brand-primary text-[10px] font-black border border-brand-primary/20 flex items-center space-x-2 tracking-[0.2em] uppercase">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Identified</span>
-                  </span>
-                ) : (
-                  <span className="px-4 py-1.5 rounded-full bg-slate-800 text-slate-400 text-[10px] font-black border border-white/5 flex items-center space-x-2 tracking-[0.2em] uppercase">
-                    <XCircle className="w-3.5 h-3.5" />
-                    <span>Unknown</span>
-                  </span>
-                )}
-              </div>
-
-              {result.success ? (
-                <div className="space-y-8 relative z-10">
-                  <div className="flex items-center space-x-8">
-                    <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-brand-primary to-brand-secondary flex items-center justify-center shadow-[0_25px_60px_rgba(244,63,94,0.35)] relative group/avatar">
-                      <User className="w-10 h-10 text-white group-hover/avatar:scale-110 transition-transform" />
-                      <div className="absolute -bottom-3 -right-3 w-10 h-10 bg-slate-950 rounded-2xl border border-white/10 flex items-center justify-center shadow-2xl">
-                        <ShieldCheck className="w-5 h-5 text-brand-primary" />
-                      </div>
-                    </div>
-                    <div>
-                      <p className="text-slate-500 text-[10px] uppercase tracking-[0.4em] font-black">Target Profile</p>
-                      <h2 className="text-3xl font-black text-white mt-1 tracking-tight">{result.prediction}</h2>
-                    </div>
-                  </div>
-
-                  <div className="space-y-5 bg-white/[0.03] p-7 rounded-[2rem] border border-white/5 shadow-inner">
-                    <div className="flex justify-between items-end">
-                      <div>
-                        <p className="text-slate-500 text-[10px] uppercase tracking-widest font-black">Recognition Match</p>
-                        <p className="text-3xl font-black text-white mt-1">{(result.confidence! * 100).toFixed(1)}<span className="text-brand-primary text-xl">%</span></p>
-                      </div>
-                      <div className="text-right">
-                        <Cpu className="w-5 h-5 text-brand-primary/40 ml-auto mb-1" />
-                        <span className="text-[10px] text-slate-600 font-mono">LATENT_MATCH: {result.confidence?.toFixed(4)}</span>
-                      </div>
-                    </div>
-                    <div className="h-4 w-full bg-white/[0.03] rounded-full overflow-hidden p-1 border border-white/5">
-                      <div 
-                        className="h-full bg-gradient-to-r from-brand-primary via-rose-400 to-brand-secondary rounded-full shadow-[0_0_20px_rgba(244,63,94,0.6)] transition-all duration-[2s] ease-out"
-                        style={{ width: `${result.confidence! * 100}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="glass bg-white/[0.01] rounded-3xl p-5 border border-white/5 hover:bg-white/[0.04] transition-all group/item">
-                      <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest mb-1 group-hover/item:text-brand-primary transition-colors">Vector Dist</p>
-                      <p className="text-white font-bold text-base">0.421</p>
-                    </div>
-                    <div className="glass bg-white/[0.01] rounded-3xl p-5 border border-white/5 hover:bg-white/[0.04] transition-all group/item">
-                      <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest mb-1 group-hover/item:text-brand-primary transition-colors">Processing</p>
-                      <p className="text-white font-bold text-base">GPU_ACCEL</p>
-                    </div>
-                  </div>
+              ) : users.length === 0 ? (
+                <div className="py-12 text-center text-zinc-500 text-sm">
+                  <User className="h-10 w-10 mx-auto mb-2 opacity-30" />
+                  No enrolled profiles yet. Start by enrolling a face!
                 </div>
               ) : (
-                <div className="text-center py-14 space-y-8 relative z-10">
-                  <div className="relative mx-auto w-20 h-20">
-                    <div className="absolute inset-0 bg-brand-primary/20 rounded-full blur-2xl animate-pulse" />
-                    <div className="relative w-20 h-20 bg-brand-primary/5 rounded-3xl border border-brand-primary/10 flex items-center justify-center shadow-inner">
-                      <AlertCircle className="w-8 h-8 text-brand-primary/50" />
+                users.map((u) => (
+                  <div
+                    key={u.user_id}
+                    className="flex items-center justify-between rounded-xl border border-zinc-800/80 bg-zinc-950/60 p-3 hover:border-zinc-700 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 text-blue-400 border border-blue-500/20 font-bold text-sm">
+                        {u.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <p className="font-semibold text-sm text-zinc-100">{u.name}</p>
+                        <p className="text-xs text-zinc-500">
+                          {u.embedding_count} samples · {u.created_at.slice(0, 10)}
+                        </p>
+                      </div>
                     </div>
+
+                    <button
+                      onClick={async () => {
+                        try {
+                          await api.delete(`/users/${encodeURIComponent(u.user_id)}`);
+                          fetchUsers();
+                        } catch {
+                          /* ignore */
+                        }
+                      }}
+                      className="rounded-lg p-2 text-zinc-500 hover:bg-red-500/10 hover:text-red-400 transition-colors cursor-pointer"
+                      title="Delete profile"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   </div>
-                  <div className="space-y-3">
-                    <p className="text-white font-black text-xl tracking-tight font-display">Identity Mismatch</p>
-                    <p className="text-slate-500 text-sm px-12 leading-relaxed font-light">
-                      The neural signature extracted from this frame does not correlate with any verified biometric profiles in our dataset.
-                    </p>
-                  </div>
-                </div>
+                ))
               )}
             </div>
-          )}
-        </div>
-      </div>
-
-      {/* Hidden Canvas for Capturing Frames */}
-      <canvas ref={canvasRef} className="hidden" />
-
-      {/* Footer */}
-      <div className="mt-12 flex flex-wrap justify-center gap-8 text-slate-700 relative z-10 opacity-40 hover:opacity-100 transition-opacity duration-700">
-        {[
-          { label: 'Layer: FastAPI', icon: Activity },
-          { label: 'Net: FaceNet-3D', icon: Cpu },
-          { label: 'UI: Neuro-Flux', icon: Zap }
-        ].map((tag, i) => (
-          <div key={i} className="flex items-center space-x-3 group cursor-default">
-            <tag.icon className="w-3.5 h-3.5 text-brand-primary group-hover:scale-125 transition-transform" />
-            <span className="text-[10px] uppercase tracking-[0.4em] font-black group-hover:text-slate-400 transition-colors">{tag.label}</span>
           </div>
-        ))}
+        </div>
+      )}
+
+      {/* ------------------------------------------------------ MAIN APPLICATION WRAPPER */}
+      <div className="mx-auto max-w-4xl px-4 py-6 sm:py-8">
+        {/* Header */}
+        <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-zinc-800/80 pb-6">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 via-indigo-600 to-violet-600 shadow-lg shadow-blue-500/20">
+              <Scan className="h-6 w-6 text-white" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-bold tracking-tight text-white">NeuroVision</h1>
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-400">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" /> Live API
+                </span>
+              </div>
+              <p className="text-xs text-zinc-400">Minimalist AI Face Recognition Studio</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {/* Profile Drawer Trigger Button */}
+            <button
+              onClick={() => setShowProfilesDrawer(true)}
+              className="flex items-center gap-2 rounded-xl bg-zinc-900 border border-zinc-800 px-3 py-2 text-xs font-semibold text-zinc-300 hover:border-zinc-700 hover:text-white transition-all cursor-pointer"
+            >
+              <Users className="h-4 w-4 text-blue-400" />
+              <span>{users.length}</span>
+            </button>
+          </div>
+        </header>
+
+        {error && (
+          <div className="mb-6 flex items-center gap-2 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-xs font-medium text-red-300">
+            <AlertCircle className="h-4 w-4 shrink-0" /> {error}
+            <button className="ml-auto p-1" onClick={() => setError(null)}>
+              <XCircle className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
+        {/* Unified Mode Switcher Pill */}
+        <div className="mb-6 flex rounded-xl bg-zinc-900 border border-zinc-800 p-1 w-full">
+          <button
+            onClick={() => handleSwitchView('enroll')}
+            className={cn(
+              'flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-xs font-semibold transition-all cursor-pointer',
+              view === 'enroll'
+                ? 'bg-blue-600 text-white shadow-md'
+                : 'text-zinc-400 hover:text-white',
+            )}
+          >
+            <Fingerprint className="h-4 w-4" /> Enroll
+          </button>
+          <button
+            onClick={() => handleSwitchView('recognize')}
+            className={cn(
+              'flex-1 flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-xs font-semibold transition-all cursor-pointer',
+              view === 'recognize'
+                ? 'bg-blue-600 text-white shadow-md'
+                : 'text-zinc-400 hover:text-white',
+            )}
+          >
+            <Scan className="h-4 w-4" /> Recognize
+          </button>
+        </div>
+
+        {/* ------------------------------------------------------ ENROLLMENT MODE */}
+        {view === 'enroll' && (
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-xl">
+            {enrollUi.existingDuplicate ? (
+              <div className="space-y-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-6 text-center shadow-xl">
+                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-amber-500/20">
+                  <AlertTriangle className="h-7 w-7 text-amber-400" />
+                </div>
+                <h2 className="text-lg font-bold text-amber-200">
+                  {enrollUi.existingDuplicate.reason === 'face'
+                    ? 'Face Already Enrolled'
+                    : 'Profile Already Exists'}
+                </h2>
+                <p className="text-xs text-zinc-300 max-w-md mx-auto leading-relaxed">
+                  {enrollUi.existingDuplicate.message ||
+                    `Profile for '${enrollUi.existingDuplicate.name}' is already enrolled. Re-enrollment is restricted for existing profiles.`}
+                </p>
+                <div className="flex flex-col sm:flex-row justify-center gap-3 pt-2">
+                  <button
+                    onClick={async () => {
+                      if (!enrollUi.existingDuplicate?.user_id) return;
+                      try {
+                        await api.delete(`/users/${encodeURIComponent(enrollUi.existingDuplicate.user_id)}`);
+                        await fetchUsers();
+                        setEnrollUi({
+                          seqIdx: 0,
+                          captured: [],
+                          status: '',
+                          pose: null,
+                          guidance: null,
+                          done: false,
+                          finalName: null,
+                          existing: false,
+                          manualCapturing: false,
+                          existingDuplicate: null,
+                        });
+                        setError(null);
+                      } catch {
+                        setError('Failed to delete existing profile');
+                      }
+                    }}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-red-600 px-5 py-2.5 text-xs font-semibold text-white hover:bg-red-500 shadow-lg shadow-red-500/20 active:scale-[0.98] transition-all cursor-pointer"
+                  >
+                    <Trash2 className="h-4 w-4" /> Delete '{enrollUi.existingDuplicate.name}' & Re-enroll
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setEnrollUi({
+                        seqIdx: 0,
+                        captured: [],
+                        status: '',
+                        pose: null,
+                        guidance: null,
+                        done: false,
+                        finalName: null,
+                        existing: false,
+                        manualCapturing: false,
+                        existingDuplicate: null,
+                      });
+                      setShowProfilesDrawer(true);
+                    }}
+                    className="flex items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-zinc-800 px-5 py-2.5 text-xs font-semibold text-zinc-200 hover:bg-zinc-700 transition-colors cursor-pointer"
+                  >
+                    <Users className="h-4 w-4 text-blue-400" /> Manage Enrolled Profiles
+                  </button>
+                </div>
+              </div>
+            ) : !stream && !enrollUi.done ? (
+              <div className="space-y-5 max-w-lg mx-auto py-4">
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold text-zinc-300 uppercase tracking-wider">Target Profile</label>
+                  <select
+                    value={existingUserId}
+                    onChange={(e) => {
+                      setExistingUserId(e.target.value);
+                      setEnrollName('');
+                    }}
+                    className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-zinc-200 outline-none focus:border-blue-500 transition-colors"
+                  >
+                    <option value="">New Person</option>
+                    {users.map((u) => (
+                      <option key={u.user_id} value={u.user_id}>
+                        {u.name} ({u.embedding_count} samples)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {!existingUserId && (
+                  <div>
+                    <label className="mb-1.5 block text-xs font-semibold text-zinc-300 uppercase tracking-wider">
+                      Name
+                    </label>
+                    <input
+                      type="text"
+                      value={enrollName}
+                      onChange={(e) => setEnrollName(e.target.value)}
+                      placeholder="e.g. Raju (leave empty for auto name)"
+                      className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-zinc-200 outline-none focus:border-blue-500 transition-colors"
+                    />
+                  </div>
+                )}
+
+                <div className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4 flex items-start gap-3 text-xs text-zinc-400">
+                  <ShieldCheck className="h-5 w-5 shrink-0 text-blue-400 mt-0.5" />
+                  <p>
+                    {existingUserId
+                      ? 'Adding additional samples to this profile improves recognition accuracy from different angles.'
+                      : 'You will be guided through 6 automatic head poses. Captures occur automatically when target angles are matched.'}
+                  </p>
+                </div>
+
+                <button
+                  onClick={startEnroll}
+                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3.5 text-sm font-semibold text-white hover:bg-blue-500 shadow-lg shadow-blue-500/20 active:scale-[0.98] transition-all cursor-pointer"
+                >
+                  <Camera className="h-4 w-4" />
+                  {existingUserId ? 'Add More Samples' : 'Start Guided Enrollment'}
+                </button>
+              </div>
+            ) : enrollUi.done ? (
+              <div className="space-y-4 text-center py-6 max-w-md mx-auto">
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                  <CheckCircle2 className="h-8 w-8" />
+                </div>
+                <h2 className="text-xl font-bold text-white">
+                  {enrollUi.existing ? 'Profile Updated' : 'Enrollment Complete'}
+                </h2>
+                <p className="text-xs text-zinc-300">
+                  Profile registered as{' '}
+                  <span className="rounded bg-blue-500/20 px-2 py-0.5 font-mono text-blue-300 font-bold">
+                    {enrollUi.finalName}
+                  </span>
+                </p>
+                <p className="text-xs text-zinc-400">{enrollUi.status}</p>
+
+                <div className="flex justify-center gap-3 pt-2">
+                  <button
+                    onClick={() => handleSwitchView('recognize')}
+                    className="flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-semibold text-white hover:bg-emerald-500 transition-all cursor-pointer"
+                  >
+                    <Video className="h-4 w-4" /> Live Recognition
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEnrollUi({ seqIdx: 0, captured: [], status: '', pose: null, guidance: null, done: false, finalName: null, existing: false, manualCapturing: false });
+                      setEnrollName('');
+                      setExistingUserId('');
+                    }}
+                    className="flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-5 py-2.5 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 transition-all cursor-pointer"
+                  >
+                    <RefreshCw className="h-4 w-4" /> Enroll Another
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-5">
+                {/* Sleek Step Indicator Bar */}
+                <div className="flex items-center justify-between text-xs font-medium text-zinc-400">
+                  <span className="text-blue-400 font-semibold">
+                    Step {enrollUi.seqIdx + 1} of {POSE_SEQUENCE.length}: {POSE_SEQUENCE[enrollUi.seqIdx].label}
+                  </span>
+                  <span>{enrollUi.captured.length}/{POSE_SEQUENCE.length} Captured</span>
+                </div>
+
+                <div className="grid grid-cols-6 gap-1.5">
+                  {POSE_SEQUENCE.map((p, i) => {
+                    const isFilled = i < enrollUi.captured.length;
+                    const isCurrent = i === enrollUi.seqIdx;
+                    return (
+                      <div
+                        key={`${p.key}-${i}`}
+                        className={cn(
+                          'h-1.5 rounded-full transition-all duration-300',
+                          isFilled
+                            ? 'bg-emerald-400'
+                            : isCurrent
+                              ? 'bg-blue-500 animate-pulse'
+                              : 'bg-zinc-800',
+                        )}
+                        title={p.label}
+                      />
+                    );
+                  })}
+                </div>
+
+                {/* Camera Viewport with Oval Target Guide */}
+                <div className="relative mx-auto w-full max-w-lg overflow-hidden rounded-2xl bg-black border border-zinc-800 shadow-2xl">
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="aspect-[4/3] w-full object-cover"
+                    style={{ transform: 'scaleX(-1)' }}
+                  />
+                  <canvas
+                    ref={overlayRef}
+                    className="pointer-events-none absolute inset-0 h-full w-full"
+                    style={{ transform: 'scaleX(-1)' }}
+                  />
+
+                  {/* Dynamic Target Alignment Oval Overlay */}
+                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                    <div
+                      className={cn(
+                        'relative flex h-60 w-44 items-center justify-center rounded-[50%] border-2 transition-all duration-300',
+                        enrollUi.guidance?.matched
+                          ? 'border-emerald-400 bg-emerald-500/10 shadow-[0_0_30px_rgba(52,211,153,0.5)] animate-pulse'
+                          : enrollUi.pose
+                            ? 'border-amber-400/80 bg-amber-500/5 shadow-[0_0_20px_rgba(251,191,36,0.25)]'
+                            : 'border-zinc-500/40 bg-black/20',
+                      )}
+                    >
+                      {/* Directional Cues */}
+                      {enrollUi.guidance?.directions?.up && (
+                        <div className="absolute top-2 flex flex-col items-center text-amber-400 animate-bounce">
+                          <ArrowUp className="h-6 w-6 stroke-[3]" />
+                          <span className="text-[9px] font-extrabold uppercase tracking-wider bg-black/80 px-2 py-0.5 rounded border border-amber-500/30">TILT UP</span>
+                        </div>
+                      )}
+                      {enrollUi.guidance?.directions?.down && (
+                        <div className="absolute bottom-2 flex flex-col items-center text-amber-400 animate-bounce">
+                          <span className="text-[9px] font-extrabold uppercase tracking-wider bg-black/80 px-2 py-0.5 rounded border border-amber-500/30">TILT DOWN</span>
+                          <ArrowDown className="h-6 w-6 stroke-[3]" />
+                        </div>
+                      )}
+                      {enrollUi.guidance?.directions?.left && (
+                        <div className="absolute left-2 flex items-center gap-1 text-amber-400 animate-pulse">
+                          <ArrowLeft className="h-6 w-6 stroke-[3]" />
+                          <span className="text-[9px] font-extrabold uppercase tracking-wider bg-black/80 px-1 py-0.5 rounded border border-amber-500/30">TURN LEFT</span>
+                        </div>
+                      )}
+                      {enrollUi.guidance?.directions?.right && (
+                        <div className="absolute right-2 flex items-center gap-1 text-amber-400 animate-pulse">
+                          <span className="text-[9px] font-extrabold uppercase tracking-wider bg-black/80 px-1 py-0.5 rounded border border-amber-500/30">TURN RIGHT</span>
+                          <ArrowRight className="h-6 w-6 stroke-[3]" />
+                        </div>
+                      )}
+
+                      {enrollUi.guidance?.matched && (
+                        <div className="flex items-center gap-1.5 rounded-full bg-emerald-500 px-3 py-1 text-xs font-bold text-black shadow-lg">
+                          <Sparkles className="h-4 w-4 animate-spin" /> MATCHED!
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Status Guidance Banner Card */}
+                <div
+                  className={cn(
+                    'rounded-xl border p-4 transition-all duration-300',
+                    enrollUi.guidance?.matched
+                      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                      : enrollUi.pose
+                        ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+                        : 'border-zinc-800 bg-zinc-950 text-zinc-300',
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    {enrollUi.guidance?.matched ? (
+                      <CheckCircle2 className="h-6 w-6 text-emerald-400 shrink-0 animate-bounce" />
+                    ) : enrollUi.guidance?.directions?.up ? (
+                      <ArrowUp className="h-6 w-6 text-amber-400 shrink-0 animate-bounce" />
+                    ) : enrollUi.guidance?.directions?.down ? (
+                      <ArrowDown className="h-6 w-6 text-amber-400 shrink-0 animate-bounce" />
+                    ) : enrollUi.guidance?.directions?.left ? (
+                      <ArrowLeft className="h-6 w-6 text-amber-400 shrink-0 animate-bounce" />
+                    ) : enrollUi.guidance?.directions?.right ? (
+                      <ArrowRight className="h-6 w-6 text-amber-400 shrink-0 animate-bounce" />
+                    ) : (
+                      <Activity className="h-5 w-5 text-blue-400 shrink-0 animate-pulse" />
+                    )}
+                    <div>
+                      <p className="text-sm font-bold text-white">
+                        {enrollUi.status || POSE_SEQUENCE[enrollUi.seqIdx].label}
+                      </p>
+                      <p className="text-xs text-zinc-400">
+                        {enrollUi.guidance?.matched
+                          ? 'Pose aligned properly! Holding still to capture...'
+                          : 'Follow visual directional prompts or click manual capture.'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={captureManually}
+                    disabled={enrollUi.manualCapturing}
+                    className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-5 py-3 text-xs font-semibold text-white hover:from-blue-500 hover:to-indigo-500 shadow-lg shadow-blue-500/20 active:scale-[0.98] transition-all disabled:opacity-50 cursor-pointer"
+                  >
+                    {enrollUi.manualCapturing ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Camera className="h-4 w-4" />
+                    )}
+                    {enrollUi.manualCapturing ? 'Capturing...' : '📸 Capture Pose Manually'}
+                  </button>
+
+                  <button
+                    onClick={abortEnroll}
+                    className="flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-xs font-semibold text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors cursor-pointer"
+                  >
+                    <StopCircle className="h-4 w-4 text-red-400" /> Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ------------------------------------------------------ RECOGNITION MODE */}
+        {view === 'recognize' && (
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 backdrop-blur-xl p-6 shadow-xl space-y-5">
+            {/* Recognition Sub-mode Switcher */}
+            <div className="flex items-center justify-between border-b border-zinc-800/80 pb-4">
+              <div className="flex rounded-xl bg-zinc-950 border border-zinc-800 p-1">
+                <button
+                  onClick={() => {
+                    stopRecognition();
+                    setRecSubMode('camera');
+                  }}
+                  className={cn(
+                    'flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-all cursor-pointer',
+                    recSubMode === 'camera'
+                      ? 'bg-zinc-800 text-white shadow-sm'
+                      : 'text-zinc-400 hover:text-white',
+                  )}
+                >
+                  <Video className="h-3.5 w-3.5 text-green-400" /> Live Camera
+                </button>
+                <button
+                  onClick={() => {
+                    stopRecognition();
+                    setRecSubMode('upload');
+                  }}
+                  className={cn(
+                    'flex items-center gap-2 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-all cursor-pointer',
+                    recSubMode === 'upload'
+                      ? 'bg-zinc-800 text-white shadow-sm'
+                      : 'text-zinc-400 hover:text-white',
+                  )}
+                >
+                  <Upload className="h-3.5 w-3.5 text-violet-400" /> Upload Image
+                </button>
+              </div>
+
+              <span className="text-xs text-zinc-400">
+                {recSubMode === 'camera' ? 'Real-time feed recognition' : 'Single photo match'}
+              </span>
+            </div>
+
+            {/* Sub-mode: Live Camera */}
+            {recSubMode === 'camera' && (
+              <div>
+                {!stream ? (
+                  <div className="space-y-4 text-center py-8 max-w-md mx-auto">
+                    <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-green-500/10 text-green-400 border border-green-500/20">
+                      <Zap className="h-7 w-7" />
+                    </div>
+                    <p className="text-xs text-zinc-400">
+                      Opens your camera to continuously identify enrolled individuals in real time.
+                    </p>
+                    <button
+                      onClick={startRecognition}
+                      className="inline-flex items-center gap-2 rounded-xl bg-green-600 px-6 py-3 text-xs font-semibold text-white hover:bg-green-500 shadow-lg shadow-green-500/20 active:scale-[0.98] transition-all cursor-pointer"
+                    >
+                      <Play className="h-4 w-4" /> Start Live Recognition
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="relative mx-auto w-full max-w-lg overflow-hidden rounded-2xl bg-black border border-zinc-800 shadow-2xl">
+                      <video
+                        ref={videoRef}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="aspect-[4/3] w-full object-cover"
+                        style={{ transform: 'scaleX(-1)' }}
+                      />
+                      <canvas
+                        ref={overlayRef}
+                        className="pointer-events-none absolute inset-0 h-full w-full"
+                        style={{ transform: 'scaleX(-1)' }}
+                      />
+                      {recRunning && (
+                        <div className="absolute left-3 top-3 flex items-center gap-2 rounded-full bg-black/70 border border-green-500/30 px-3 py-1 text-[11px] font-bold text-green-400">
+                          <Activity className="h-3 w-3 animate-pulse" /> RECOGNIZING
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+                      {recResult && !recResult.error ? (
+                        recResult.faces.length === 0 ? (
+                          <p className="flex items-center gap-2 text-xs text-zinc-400">
+                            <XCircle className="h-4 w-4 text-zinc-500" /> No face in frame
+                          </p>
+                        ) : (
+                          <div className="space-y-1.5">
+                            <p className="flex items-center gap-2 text-xs text-zinc-500">
+                              <Activity className="h-4 w-4 text-blue-400" />
+                              {recResult.faces.length} face{recResult.faces.length === 1 ? '' : 's'} detected
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                              {recResult.faces.map((f, i) => (
+                                <span
+                                  key={i}
+                                  className={cn(
+                                    'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium',
+                                    f.success ? 'bg-green-500/15 text-green-300' : 'bg-red-500/15 text-red-300',
+                                  )}
+                                >
+                                  {f.success ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />}
+                                  {f.prediction} · {((f.confidence ?? 0) * 100).toFixed(0)}%
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )
+                      ) : (
+                        <p className="flex items-center gap-2 text-xs text-zinc-400">
+                          <Loader2 className="h-4 w-4 animate-spin text-blue-400" /> Scanning frame for faces...
+                        </p>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={stopRecognition}
+                      className="flex items-center justify-center gap-2 rounded-xl bg-red-600 px-5 py-2.5 text-xs font-semibold text-white hover:bg-red-500 transition-colors cursor-pointer"
+                    >
+                      <StopCircle className="h-4 w-4" /> Stop Live Recognition
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Sub-mode: Image Upload */}
+            {recSubMode === 'upload' && (
+              <div className="flex flex-col gap-5 sm:flex-row">
+                <div className="flex-1 space-y-4">
+                  <label className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-zinc-800 bg-zinc-950 p-8 text-center hover:border-blue-500/80 transition-colors">
+                    {previewUrl ? (
+                      <img src={previewUrl} alt="preview" className="max-h-56 rounded-xl object-contain shadow-lg" />
+                    ) : (
+                      <>
+                        <ImageIcon className="h-10 w-10 text-zinc-600" />
+                        <span className="text-xs text-zinc-400">Click or drag image to identify face</span>
+                      </>
+                    )}
+                    <input type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
+                  </label>
+
+                  <button
+                    onClick={uploadAndRecognize}
+                    disabled={!selectedFile || uploadLoading}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-xs font-semibold text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer"
+                  >
+                    {uploadLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Cpu className="h-4 w-4" />}
+                    {uploadLoading ? 'Processing Image...' : 'Recognize Face'}
+                  </button>
+                </div>
+
+                <div className="flex-1 rounded-2xl border border-zinc-800 bg-zinc-950 p-5 flex flex-col justify-center">
+                  {uploadResult ? (
+                    uploadResult.error ? (
+                      <div className="flex items-center gap-2 text-xs text-red-400">
+                        <XCircle className="h-4 w-4 shrink-0" /> {uploadResult.error}
+                      </div>
+                    ) : uploadResult.faces.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center gap-2 text-center text-zinc-500 py-8">
+                        <XCircle className="h-8 w-8 opacity-40" />
+                        <p className="text-xs">No face detected in the image</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <p className="flex items-center gap-2 text-xs text-zinc-400">
+                          <Activity className="h-4 w-4 text-blue-400" />
+                          {uploadResult.faces.length} face{uploadResult.faces.length === 1 ? '' : 's'} detected
+                        </p>
+                        {uploadResult.faces.map((f, i) => (
+                          <div key={i} className="space-y-1.5 rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
+                            <div className="flex items-center gap-2">
+                              {f.success ? (
+                                <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                              ) : (
+                                <XCircle className="h-4 w-4 text-red-400 shrink-0" />
+                              )}
+                              <span className="text-sm font-semibold text-white">{f.prediction}</span>
+                            </div>
+                            <div className="space-y-1">
+                              <div className="flex justify-between text-xs text-zinc-400">
+                                <span>Confidence</span>
+                                <span className="font-mono">{((f.confidence ?? 0) * 100).toFixed(0)}%</span>
+                              </div>
+                              <div className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">
+                                <div
+                                  className={cn('h-full rounded-full transition-all duration-300', f.success ? 'bg-emerald-400' : 'bg-red-400')}
+                                  style={{ width: `${Math.max(0, Math.min(100, (f.confidence ?? 0) * 100))}%` }}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  ) : (
+                    <div className="flex flex-col items-center justify-center gap-2 text-center text-zinc-600 py-8">
+                      <User className="h-8 w-8 opacity-40" />
+                      <p className="text-xs">Upload a photo to see identification metrics</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
