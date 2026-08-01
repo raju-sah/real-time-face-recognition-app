@@ -51,6 +51,7 @@ datasets/
 cropped_faces/
 processed_dataset/
 backend/uploads/
+backend/gallery/
 *.h5
 *.pth
 *.pt

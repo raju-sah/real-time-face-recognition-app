@@ -10,7 +10,6 @@ Pillow
 opencv-python
 joblib
 
-# Face Recognition
-mtcnn
-tensorflow
-keras-facenet
+# Face Recognition (ONNX Runtime — fits Render free tier 512MB)
+insightface
+onnxruntime

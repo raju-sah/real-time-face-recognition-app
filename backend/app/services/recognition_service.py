@@ -6,8 +6,7 @@ import secrets
 import numpy as np
 import gc
 from datetime import datetime, timezone
-from mtcnn import MTCNN
-from keras_facenet import FaceNet
+import insightface
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -48,8 +47,12 @@ class FaceRecognitionService:
         self.gallery_dir = os.path.join(self.project_root, "backend", "gallery")
         os.makedirs(self.gallery_dir, exist_ok=True)
 
-        self.detector = MTCNN()
-        self.embedder = FaceNet()
+        self.model = insightface.app.FaceAnalysis(
+            name="buffalo_s",
+            providers=["CPUExecutionProvider"],
+            allowed_modules=["detection", "recognition"],
+        )
+        self.model.prepare(ctx_id=-1, det_size=(640, 640))
 
         self.SIMILARITY_THRESHOLD = 0.40
         self.EMBEDDING_SIZE = 512
@@ -157,6 +160,31 @@ class FaceRecognitionService:
         sim = cosine_similarity(embs, new_emb)
         return bool(np.any(sim >= threshold))
 
+    # ------------------------------------------------------------------ extract
+
+    def _extract(self, image_rgb):
+        """Detect faces + compute embeddings in one ONNX pass.
+
+        Returns [(det, embedding)] where det keeps the old MTCNN shape:
+        {"box": [x, y, w, h], "keypoints": {left_eye, right_eye, nose,
+        mouth_left, mouth_right}}.
+        """
+        results = []
+        for face in self.model.get(image_rgb):
+            x1, y1, x2, y2 = face.bbox.astype(int)
+            det = {
+                "box": [int(x1), int(y1), int(x2 - x1), int(y2 - y1)],
+                "keypoints": {
+                    "left_eye": face.kps[0].tolist(),
+                    "right_eye": face.kps[1].tolist(),
+                    "nose": face.kps[2].tolist(),
+                    "mouth_left": face.kps[3].tolist(),
+                    "mouth_right": face.kps[4].tolist(),
+                },
+            }
+            results.append((det, face.normed_embedding.astype(np.float32)))
+        return results
+
     # ------------------------------------------------------------------ pose/quality
 
     def _estimate_pose(self, det):
@@ -184,16 +212,21 @@ class FaceRecognitionService:
 
         yaw = (nose[0] - ex) / eye_dist
         pitch = (nose[1] - ey) / face_h
+
+        # insightface 5-point landmarks sit lower than MTCNN's, so the raw
+        # pitch reads ~0.25 too high for a neutral face. Shift it back onto
+        # the scale the pose thresholds below were tuned for (neutral ≈ 0.37).
+        pitch -= 0.25
         return float(yaw), float(pitch)
 
     def _pose_matches(self, yaw, pitch, target):
         target = (target or "front").lower()
         if target == "front":
-            return abs(yaw) <= 0.20 and 0.20 <= pitch <= 0.54
+            return abs(yaw) <= 0.30 and 0.20 <= pitch <= 0.54
         if target == "left":
-            return abs(yaw) >= 0.18 or yaw >= 0.18 or yaw <= -0.18
+            return abs(yaw) >= 0.30 or yaw >= 0.30 or yaw <= -0.30
         if target == "right":
-            return abs(yaw) >= 0.18 or yaw <= -0.18 or yaw >= 0.18
+            return abs(yaw) >= 0.30 or yaw <= -0.30 or yaw >= 0.30
         if target == "up":
             return pitch <= 0.26
         if target == "down":
@@ -213,10 +246,10 @@ class FaceRecognitionService:
             }
 
         if target == "front":
-            if yaw > 0.20:
+            if yaw > 0.30:
                 dirs["left"] = True
                 msg = "Turn head slightly to your LEFT"
-            elif yaw < -0.20:
+            elif yaw < -0.30:
                 dirs["right"] = True
                 msg = "Turn head slightly to your RIGHT"
             elif pitch < 0.20:
@@ -327,7 +360,7 @@ class FaceRecognitionService:
                 image = cv2.resize(image, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            detections = self.detector.detect_faces(image_rgb)
+            detections = self._extract(image_rgb)
             if not detections:
                 return {
                     "status": "no_face",
@@ -335,7 +368,7 @@ class FaceRecognitionService:
                     "guidance": {"guidance": "Position your face inside the target area", "matched": False, "directions": {}},
                 }
 
-            det = detections[0]
+            det, embedding = detections[0]
             yaw, pitch = self._estimate_pose(det)
             x, y, width, height = det["box"]
             x, y = max(0, x), max(0, y)
@@ -361,9 +394,7 @@ class FaceRecognitionService:
                     "guidance": guidance,
                 }
 
-            face_rgb = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2RGB)
-            face_rgb = cv2.resize(face_rgb, (160, 160), interpolation=cv2.INTER_AREA)
-            embedding = self.embedder.embeddings(np.expand_dims(face_rgb, axis=0))[0].astype(float)
+            embedding = embedding.astype(float)
 
             # Duplicate face check against existing gallery profiles (only for new enrollment, not existing_user_id session)
             if not session.get("existing_user_id") and len(session["embeddings"]) == 0 and self.gallery_embeddings.shape[0] > 0 and not force:
@@ -387,7 +418,7 @@ class FaceRecognitionService:
             session["embeddings"].append(embedding.tolist())
             session["poses"].append(target_pose)
 
-            del image, image_rgb, face_bgr, face_rgb
+            del image, image_rgb, face_bgr
             gc.collect()
 
             return {
@@ -485,23 +516,19 @@ class FaceRecognitionService:
                 image = cv2.resize(image, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
 
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            detections = self.detector.detect_faces(image_rgb)
+            detections = self._extract(image_rgb)
             if not detections:
                 return {"faces": [], "error": "No face detected"}
 
             has_gallery = self.gallery_embeddings.shape[0] > 0
             faces = []
 
-            for det in detections:
+            for det, embedding in detections:
                 x, y, width, height = det["box"]
                 x, y = max(0, x), max(0, y)
                 face_image = image[y : y + height, x : x + width]
                 if face_image.size == 0:
                     continue
-
-                face_rgb = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
-                face_rgb = cv2.resize(face_rgb, (160, 160), interpolation=cv2.INTER_AREA)
-                embedding = self.embedder.embeddings(np.expand_dims(face_rgb, axis=0))[0]
 
                 person_name = "Unknown"
                 confidence = 0.0
