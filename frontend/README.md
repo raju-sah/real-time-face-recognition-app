@@ -1,5 +1,10 @@
 # React + TypeScript + Vite
 
+Frontend for the real-time face recognition app. Deployed to Vercel via
+`.github/workflows/vercel-deploy.yml` on every push touching `frontend/**`.
+Production build reads `VITE_API_URL` (set as a Vercel production env var)
+pointing at the Render backend.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:
