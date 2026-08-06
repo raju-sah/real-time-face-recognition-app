@@ -347,6 +347,7 @@ function App() {
     stopRecognition();
     resetEnrollState();
     setIsEnrolling(true);
+    setEnrollmentComplete(false);
   };
 
   const handleCancelEnrolling = () => {
@@ -655,8 +656,17 @@ function App() {
   };
 
   const hasUsers = users.length > 0;
+  const [enrollmentComplete, setEnrollmentComplete] = useState(false);
+
+  // Auto-transition to recognition after enrollment completes
+  useEffect(() => {
+    if (enrollUi.done && hasUsers) {
+      setEnrollmentComplete(true);
+    }
+  }, [enrollUi.done, hasUsers]);
+
   const showEnrollForm = !hasUsers || isEnrolling;
-  const showRecognize = hasUsers && !isEnrolling;
+  const showRecognize = (hasUsers && !isEnrolling) || enrollmentComplete;
 
   const buttonHover = { scale: 1.02, transition: { duration: 0.15 } };
   const buttonTap = { scale: 0.97, transition: { duration: 0.1 } };
