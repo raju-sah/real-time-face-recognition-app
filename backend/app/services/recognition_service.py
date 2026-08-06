@@ -89,20 +89,27 @@ class FaceRecognitionService:
         self.EMBEDDING_SIZE = 512
 
         self.enroll_sessions = {}
-
-        self._load_gallery()
+        self.people = []
+        self.gallery_embeddings = np.empty((0, self.EMBEDDING_SIZE), dtype=np.float32)
+        self.gallery_labels = np.array([], dtype=int)
 
         self._initialized = True
         print("FaceRecognitionService initialized successfully.")
 
     # ------------------------------------------------------------------ gallery
 
-    def _load_gallery(self):
+    def _session_dir(self, session_id):
+        d = os.path.join(self.gallery_dir, session_id)
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def _load_gallery(self, session_id):
         self.people = []
-        for filename in sorted(os.listdir(self.gallery_dir)):
+        session_dir = self._session_dir(session_id)
+        for filename in sorted(os.listdir(session_dir)):
             if not filename.endswith(".json"):
                 continue
-            path = os.path.join(self.gallery_dir, filename)
+            path = os.path.join(session_dir, filename)
             try:
                 with open(path, "r") as f:
                     person = json.load(f)
@@ -112,10 +119,6 @@ class FaceRecognitionService:
                 print(f"Failed to load {filename}: {e}")
 
         self._rebuild_index()
-        print(
-            f"Gallery loaded: {len(self.people)} people, "
-            f"{len(self.gallery_embeddings) if self.gallery_embeddings.size else 0} embeddings."
-        )
 
     def _rebuild_index(self):
         embeddings = []
@@ -132,19 +135,21 @@ class FaceRecognitionService:
             self.gallery_embeddings = np.empty((0, self.EMBEDDING_SIZE), dtype=np.float32)
             self.gallery_labels = np.array([], dtype=int)
 
-    def _persist_person(self, person):
+    def _persist_person(self, session_id, person):
         name = sanitize_name(person["name"]) or "user"
-        path = os.path.join(self.gallery_dir, f"{name}.json")
+        session_dir = self._session_dir(session_id)
+        path = os.path.join(session_dir, f"{name}.json")
         suffix = 2
         while os.path.exists(path):
-            path = os.path.join(self.gallery_dir, f"{name}_{suffix}.json")
+            path = os.path.join(session_dir, f"{name}_{suffix}.json")
             suffix += 1
         with open(path, "w") as f:
             json.dump(person, f)
         person["file"] = os.path.basename(path)
         return path
 
-    def list_users(self):
+    def list_users(self, session_id):
+        self._load_gallery(session_id)
         return [
             {
                 "name": p["name"],
@@ -155,10 +160,12 @@ class FaceRecognitionService:
             for p in self.people
         ]
 
-    def remove_user(self, user_id):
+    def remove_user(self, session_id, user_id):
+        self._load_gallery(session_id)
         for idx, person in enumerate(self.people):
             if person.get("user_id") == user_id:
-                path = os.path.join(self.gallery_dir, person.get("file", f"{sanitize_name(person['name'])}.json"))
+                session_dir = self._session_dir(session_id)
+                path = os.path.join(session_dir, person.get("file", f"{sanitize_name(person['name'])}.json"))
                 if os.path.exists(path):
                     os.remove(path)
                 self.people.pop(idx)
@@ -335,13 +342,14 @@ class FaceRecognitionService:
 
     # ------------------------------------------------------------------ enroll
 
-    def start_enroll(self, name="", existing_user_id=""):
+    def start_enroll(self, session_id, name="", existing_user_id=""):
+        self._load_gallery(session_id)
         if existing_user_id:
             person = next((p for p in self.people if p["user_id"] == existing_user_id), None)
             if person is None:
                 return {"status": "error", "message": "Existing user not found"}
             user_id = secrets.token_hex(8)
-            self.enroll_sessions[user_id] = {
+            self.enroll_sessions[(session_id, user_id)] = {
                 "name": person["name"],
                 "existing_user_id": person["user_id"],
                 "embeddings": [],
@@ -366,7 +374,7 @@ class FaceRecognitionService:
 
         user_id = secrets.token_hex(8)
         final_name = clean or self.auto_name()
-        self.enroll_sessions[user_id] = {
+        self.enroll_sessions[(session_id, user_id)] = {
             "name": final_name,
             "existing_user_id": None,
             "embeddings": [],
@@ -375,10 +383,12 @@ class FaceRecognitionService:
         }
         return {"status": "ok", "user_id": user_id, "name": final_name, "existing": False}
 
-    def enroll_sample(self, image_path, user_id, target_pose, force=False):
-        session = self.enroll_sessions.get(user_id)
+    def enroll_sample(self, session_id, image_path, user_id, target_pose, force=False):
+        session = self.enroll_sessions.get((session_id, user_id))
         if session is None:
             return {"status": "error", "message": "Unknown enrollment session"}
+
+        self._load_gallery(session_id)
 
         try:
             image = cv2.imread(image_path)
@@ -465,10 +475,12 @@ class FaceRecognitionService:
             print(f"Error in enroll_sample: {e}")
             return {"status": "error", "message": str(e)}
 
-    def complete_enroll(self, user_id, name=""):
-        session = self.enroll_sessions.pop(user_id, None)
+    def complete_enroll(self, session_id, user_id, name=""):
+        session = self.enroll_sessions.pop((session_id, user_id), None)
         if session is None:
             return None
+
+        self._load_gallery(session_id)
 
         if session.get("existing_user_id"):
             person = next((p for p in self.people if p["user_id"] == session["existing_user_id"]), None)
@@ -485,7 +497,8 @@ class FaceRecognitionService:
                 added += 1
 
             filename = person.get("file", f"{sanitize_name(person['name'])}.json")
-            path = os.path.join(self.gallery_dir, filename)
+            session_dir = self._session_dir(session_id)
+            path = os.path.join(session_dir, filename)
             with open(path, "w") as f:
                 json.dump(person, f)
             self._rebuild_index()
@@ -518,7 +531,7 @@ class FaceRecognitionService:
             "embeddings": session["embeddings"],
         }
 
-        self._persist_person(person)
+        self._persist_person(session_id, person)
         self.people.append(person)
         self._rebuild_index()
 
@@ -530,13 +543,14 @@ class FaceRecognitionService:
             "existing": False,
         }
 
-    def abort_enroll(self, user_id):
-        return bool(self.enroll_sessions.pop(user_id, None))
+    def abort_enroll(self, session_id, user_id):
+        return bool(self.enroll_sessions.pop((session_id, user_id), None))
 
     # ------------------------------------------------------------------ recognize
 
-    def recognize(self, image_path):
+    def recognize(self, session_id, image_path):
         try:
+            self._load_gallery(session_id)
             image = cv2.imread(image_path)
             if image is None:
                 return {"error": "Could not read image"}

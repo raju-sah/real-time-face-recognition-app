@@ -1,8 +1,9 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 import os
 import uuid
 import base64
+import secrets
 import shutil
 from dotenv import load_dotenv
 
@@ -43,27 +44,38 @@ def _cleanup(path: str):
         pass
 
 
+def _get_session_id(x_session_id: str = Header(None)) -> str:
+    return x_session_id or secrets.token_hex(8)
+
+
 @app.get("/")
 async def root():
     return {"message": "Face Recognition API is running"}
 
 
 @app.get("/users")
-async def list_users():
-    return {"users": recognition_service.list_users()}
+async def list_users(session_id: str = Header(None)):
+    sid = _get_session_id(session_id)
+    return {"users": recognition_service.list_users(sid)}
 
 
 @app.delete("/users/{user_id}")
-async def delete_user(user_id: str):
-    removed = recognition_service.remove_user(user_id)
+async def delete_user(user_id: str, session_id: str = Header(None)):
+    sid = _get_session_id(session_id)
+    removed = recognition_service.remove_user(sid, user_id)
     if not removed:
         raise HTTPException(status_code=404, detail="User not found")
     return {"ok": True}
 
 
 @app.post("/enroll/start")
-async def enroll_start(name: str = Form(""), existing_user_id: str = Form("")):
-    result = recognition_service.start_enroll(name, existing_user_id)
+async def enroll_start(
+    name: str = Form(""),
+    existing_user_id: str = Form(""),
+    session_id: str = Header(None),
+):
+    sid = _get_session_id(session_id)
+    result = recognition_service.start_enroll(sid, name, existing_user_id)
     if result.get("status") == "error":
         raise HTTPException(status_code=404, detail=result.get("message", "User not found"))
     return result
@@ -75,46 +87,52 @@ async def enroll_sample(
     user_id: str = Form(...),
     target_pose: str = Form("front"),
     force: bool = Form(False),
+    session_id: str = Header(None),
 ):
+    sid = _get_session_id(session_id)
     temp_file_path = _save_temp(await file.read(), file.filename or "sample.jpg")
     try:
-        result = recognition_service.enroll_sample(temp_file_path, user_id, target_pose, force=force)
+        result = recognition_service.enroll_sample(sid, temp_file_path, user_id, target_pose, force=force)
     finally:
         _cleanup(temp_file_path)
     return result
 
 
 @app.post("/enroll/complete")
-async def enroll_complete(payload: dict):
+async def enroll_complete(payload: dict, session_id: str = Header(None)):
+    sid = _get_session_id(session_id)
     user_id = payload.get("user_id")
     name = payload.get("name", "")
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id is required")
-    result = recognition_service.complete_enroll(user_id, name)
+    result = recognition_service.complete_enroll(sid, user_id, name)
     if result is None:
         raise HTTPException(status_code=404, detail="Enrollment session not found")
     return result
 
 
 @app.post("/enroll/abort")
-async def enroll_abort(payload: dict):
+async def enroll_abort(payload: dict, session_id: str = Header(None)):
+    sid = _get_session_id(session_id)
     user_id = payload.get("user_id")
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id is required")
-    return {"ok": recognition_service.abort_enroll(user_id)}
+    return {"ok": recognition_service.abort_enroll(sid, user_id)}
 
 
 @app.post("/recognize")
-async def recognize_image(file: UploadFile = File(...)):
+async def recognize_image(file: UploadFile = File(...), session_id: str = Header(None)):
+    sid = _get_session_id(session_id)
     temp_file_path = _save_temp(await file.read(), file.filename or "upload.jpg")
     try:
-        return _format_recognize_result(recognition_service.recognize(temp_file_path))
+        return _format_recognize_result(recognition_service.recognize(sid, temp_file_path))
     finally:
         _cleanup(temp_file_path)
 
 
 @app.post("/recognize/base64")
-async def recognize_base64(payload: dict):
+async def recognize_base64(payload: dict, session_id: str = Header(None)):
+    sid = _get_session_id(session_id)
     image_base64 = payload.get("image_base64")
     if not image_base64:
         raise HTTPException(status_code=400, detail="image_base64 is required")
@@ -128,7 +146,7 @@ async def recognize_base64(payload: dict):
 
     temp_file_path = _save_temp(contents, "frame.jpg")
     try:
-        return _format_recognize_result(recognition_service.recognize(temp_file_path))
+        return _format_recognize_result(recognition_service.recognize(sid, temp_file_path))
     finally:
         _cleanup(temp_file_path)
 
